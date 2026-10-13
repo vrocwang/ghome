@@ -583,7 +583,8 @@ func TestLookupHostilePages(t *testing.T) {
 	s := newSite(t, map[string]http.HandlerFunc{"/": page(``)})
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
-	if _, ok := r.Lookup(nil, s.URL); ok { //nolint:staticcheck // deliberately hostile
+	//lint:ignore SA1012 deliberately hostile: a nil context must not panic
+	if _, ok := r.Lookup(nil, s.URL); ok {
 		t.Error("Lookup(nil, ...) = true, want false")
 	}
 }
@@ -949,6 +950,7 @@ func TestWarmIgnoresDisallowedAndFresh(t *testing.T) {
 		"://nope",
 		"",
 	})
+	//lint:ignore SA1012 deliberately hostile: a nil context must not panic
 	r.Warm(nil, []string{s.URL})
 
 	time.Sleep(200 * time.Millisecond)

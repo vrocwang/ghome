@@ -188,11 +188,26 @@ func (o overlayFS) resolve(name string) (string, bool) {
 		}
 	}
 	full := filepath.Join(o.dir, filepath.FromSlash(path.Clean("/"+slashed)))
-	rel, err := filepath.Rel(o.dir, full)
+
+	// Symlinks are resolved on both sides before the comparison. Comparing the
+	// unresolved path would let a link inside the override directory serve a
+	// file from outside it, and would equally reject a directory that is itself
+	// reached through a link.
+	realDir, err := filepath.EvalSymlinks(o.dir)
+	if err != nil {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(full)
+	if err != nil {
+		// Missing files land here. Returning false falls back to the embedded
+		// copy, which is what an absent override should do anyway.
+		return "", false
+	}
+	rel, err := filepath.Rel(realDir, real)
 	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return "", false
 	}
-	return full, true
+	return real, true
 }
 
 func (o overlayFS) Open(name string) (fs.File, error) {

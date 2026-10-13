@@ -56,11 +56,27 @@ func (f *File) FetchPath(ctx context.Context, path string) (Snapshot, error) {
 	joined := filepath.Join(f.dir, filepath.FromSlash(path))
 
 	// Belt and braces after the syntactic check: confirm the resolved path
-	// really is inside the directory, following any symlink in it.
-	if rel, err := filepath.Rel(f.dir, joined); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+	// really is inside the directory.
+	//
+	// Both sides have to be resolved before they are compared. Comparing an
+	// unresolved path against the directory would be wrong in both directions:
+	// a link committed to the config repository would read out of the directory
+	// unnoticed, and a directory that is itself reached through a link (macOS
+	// /tmp, for one) would look like an escape when it is not.
+	realDir, err := filepath.EvalSymlinks(f.dir)
+	if err != nil {
+		return Snapshot{}, fmt.Errorf("file: %w", err)
+	}
+	real, err := filepath.EvalSymlinks(joined)
+	if err != nil {
+		// A missing file lands here too, which is fine: it cannot be read
+		// either way and the error still names what was asked for.
+		return Snapshot{}, fmt.Errorf("file: %q: %w", path, err)
+	}
+	if rel, err := filepath.Rel(realDir, real); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
 		return Snapshot{}, fmt.Errorf("file: %q resolves outside the config directory", path)
 	}
-	return f.read(ctx, joined)
+	return f.read(ctx, real)
 }
 
 func (f *File) read(ctx context.Context, path string) (Snapshot, error) {

@@ -136,14 +136,18 @@ func New(opts Options) *Resolver {
 		opts.Logger = slog.Default()
 	}
 
-	return &Resolver{
+	r := &Resolver{
 		opts:    opts,
 		log:     opts.Logger,
-		client:  newClient(opts.Timeout),
 		allowed: map[string]struct{}{},
 		lru:     list.New(),
 		byKey:   map[string]*list.Element{},
 	}
+	// The client needs the allow list, not just the timeout: a redirect is
+	// chosen by the far end, so without this check any allowed host could hand
+	// the fetch to an address the config never named.
+	r.client = newClient(opts.Timeout, r.isAllowed)
+	return r
 }
 
 // Allow registers the page URLs the resolver is permitted to serve. It is
@@ -152,6 +156,11 @@ func New(opts Options) *Resolver {
 // The list replaces the previous one rather than adding to it: a link removed
 // from nav.yaml must stop being reachable immediately. Only http and https
 // hosts are kept, since nothing else is ever fetched.
+//
+// It bounds every hop, not just the first: page markup naming an icon on
+// another host is refused, and so is a redirect that leaves the list. The cost
+// is that an icon served from a CDN is not fetched; --icon-dir is the answer
+// for those.
 func (r *Resolver) Allow(pageURLs []string) {
 	next := make(map[string]struct{}, len(pageURLs))
 	for _, raw := range pageURLs {
@@ -362,6 +371,13 @@ func (r *Resolver) scrapeIcon(ctx context.Context, page *url.URL) (*url.URL, err
 
 // download fetches one icon and refuses anything that is not an image.
 func (r *Resolver) download(ctx context.Context, iconURL *url.URL) (Icon, error) {
+	// A page is free to declare its icon anywhere, so this is checked here
+	// rather than only where the link was parsed. Without it, one allowed host
+	// is enough to make the resolver fetch any address at all.
+	if host := iconURL.Hostname(); !r.isAllowed(host) {
+		return Icon{}, fmt.Errorf("icons: %s is not in the config", host)
+	}
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, iconURL.String(), nil)
 	if err != nil {
 		return Icon{}, err
@@ -747,7 +763,11 @@ func (g *flightGroup) do(key string, fn func() (Icon, bool)) (Icon, bool) {
 // newClient builds the upstream client. The redirect policy is the one place a
 // hostile response could steer us somewhere we would never fetch directly, so
 // anything that is not http(s) is refused.
-func newClient(timeout time.Duration) *http.Client {
+// newClient builds the HTTP client used for every fetch. allowed decides which
+// hosts may still be reached after a redirect: the first request is checked
+// against the allow list by the caller, but the redirect target is chosen by
+// the server being fetched, so it has to be checked too.
+func newClient(timeout time.Duration, allowed func(string) bool) *http.Client {
 	transport := &http.Transport{
 		Proxy:                 http.ProxyFromEnvironment,
 		DialContext:           (&net.Dialer{Timeout: 5 * time.Second, KeepAlive: 30 * time.Second}).DialContext,
@@ -767,6 +787,9 @@ func newClient(timeout time.Duration) *http.Client {
 			}
 			if !isHTTP(req.URL) {
 				return fmt.Errorf("icons: refusing redirect to scheme %q", req.URL.Scheme)
+			}
+			if host := req.URL.Hostname(); !allowed(host) {
+				return fmt.Errorf("icons: refusing redirect to %q, which is not in the config", host)
 			}
 			return nil
 		},
