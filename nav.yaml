@@ -24,13 +24,26 @@ style:
 search:
   enabled: true
   hotkey: "/"
-  engines:
-    - name: Google
-      keyword: g
-      url: "https://www.google.com/search?q={q}"
-    - name: Bing
-      keyword: b
-      url: "https://www.bing.com/search?q={q}"
+  # engines 是可选的一段，不配也完全可用：搜索框的主职是按名称/描述/标签
+  # 过滤下面的链接，那不依赖任何外部服务。
+  #
+  # 配了之后，"<keyword> 关键词" 回车会跳到对应引擎，Ctrl/Cmd+Enter 用第一个。
+  # 内部导航页里真正有用的是接内网自己的检索：
+  #
+  # engines:
+  #   - name: 内网检索
+  #     keyword: s
+  #     url: "https://search.internal/?q={q}"
+  #   - name: Wiki
+  #     keyword: w
+  #     url: "https://wiki.internal/search?q={q}"
+  #
+  # 公网搜索引擎也能配，但先确认访问这个页面的网络真的打得开它，
+  # 否则那个 keyword 就是个死键：
+  #
+  #   - name: Bing
+  #     keyword: b
+  #     url: "https://www.bing.com/search?q={q}"
 
 # 服务状态灯。默认关闭，关着的时候服务端一个探测请求都不发。
 # 打开后每个链接右边会出现绿/红点，右上角显示在线数，点它可以只看异常的服务。

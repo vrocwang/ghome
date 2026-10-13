@@ -339,10 +339,13 @@ style: { ... }            # 见「改样式不用重新编译」
 search:
   enabled: true           # (true)
   hotkey: "/"             # ("/") 按此键聚焦搜索框；Cmd/Ctrl+K 始终可用
-  engines:                # (空) 不配就只做本地过滤
-    - name: Google
-      keyword: g          # 输入 "g 关键词" 回车直接用它搜
-      url: "https://www.google.com/search?q={q}"   # {q} 必填
+  engines:                # (空) 可选，不配也完全可用
+    - name: 内网检索        # 搜索框的主职是按名称/描述/标签过滤链接，
+      url: "https://search.example.com/?q={q}"     # 那不依赖任何外部服务。
+    - name: Wiki           # engines 的用处是接内网自己的检索：
+      keyword: w           # 输入 "w 关键词" 回车跳到该引擎；
+      url: "https://wiki.example.com/search?q={q}" # 不写 keyword 的就是默认引擎
+                          # {q} 是必填占位符
 
 status:
   enabled: false          # (false)
@@ -609,6 +612,22 @@ make run      # 用 ./nav.yaml 跑起来
 make cross    # 交叉编译
 ```
 
+### 前端怎么测
+
+前端的 bug 读代码看不出来——健康胶囊没渲染、状态灯卡在"探测中"、列表布局图标自己被擦掉、置顶项明明显示着却提示"没有匹配"——这几个都是把页面塞进无头 Chrome 实际驱动一遍才发现的。
+
+所以有一份浏览器冒烟检查：
+
+```bash
+make run &                              # 或任何跑着的 ghome
+make ui-check                           # = node scripts/ui-check.mjs http://127.0.0.1:8080/
+make ui-check UI_URL=http://127.0.0.1:8080/
+```
+
+它会检查：无未捕获异常、无 console 错误（`/api/icon` 的 404 属于设计内降级，会被跳过并计数）、页面结构完整、配置已渲染、骨架屏已消失、设计令牌解析成功、样式表带版本号、置顶项没有在分组里重复、搜索过滤与空态正确（**包括只匹配到置顶项时不误报空态**这条回归）、清空后恢复。任一断言失败就以非 0 退出。
+
+它需要 Chrome，所以**不在 `go test` 里**——那条路径保持零外部依赖。
+
 代码结构：
 
 ```
@@ -621,6 +640,7 @@ internal/icons/              图标解析（<link rel=icon>）+ LRU 缓存 + 单
 internal/status/             服务健康探测（并发受限、超时、变化检测）
 internal/server/             HTTP 层（页面、API、SSE、webhook、/theme.css、健康检查）
 internal/server/web/         内嵌前端（原生 JS，无框架无构建步骤）
+scripts/ui-check.mjs         无头 Chrome 的界面冒烟检查
 deploy/                      systemd / nginx / 环境变量样例
 docs/                        三套布局的截图
 custom.css.example           配置仓里自定义样式表的起点

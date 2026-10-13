@@ -332,7 +332,10 @@
     state.dotNodes = [];
     state.selected = -1;
 
-    renderPinned(cfg, tokens, revision);
+    // Pinned links are lifted out of the groups, so they are not part of
+    // `shown`. Counting only group links made a query that matches just a
+    // pinned entry report "nothing matched" while showing that entry.
+    var pinned = renderPinned(cfg, tokens, revision);
 
     var grid = el('div', 'group-grid');
     var shown = 0;
@@ -368,7 +371,7 @@
       grid.appendChild(card);
     });
 
-    if (!shown) grid.appendChild(el('div', 'empty', emptyMessage()));
+    if (!shown && !pinned) grid.appendChild(el('div', 'empty', emptyMessage()));
 
     gridHost.replaceChildren(grid);
     hideState();
@@ -393,7 +396,7 @@
     if (!pinned.length) {
       els.pinned.hidden = true;
       els.pinnedRow.replaceChildren();
-      return;
+      return 0;
     }
 
     els.pinnedRow.replaceChildren();
@@ -409,6 +412,7 @@
       state.visible.push(a);
     });
     els.pinned.hidden = false;
+    return pinned.length;
   }
 
   function renderLink(link, revision) {

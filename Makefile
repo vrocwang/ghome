@@ -3,13 +3,14 @@ VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BUILD   := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 
-.PHONY: help build run run-gitea test race vet fmt tidy check cross clean
+.PHONY: help build run test race vet fmt tidy check ui-check cross clean
 
 help:
 	@echo "make build     - build bin/ghome for this machine"
 	@echo "make run       - run against ./nav.yaml"
 	@echo "make cross     - build linux/amd64, linux/arm64 and darwin/arm64 into dist/"
 	@echo "make check     - fmt + vet + test"
+	@echo "make ui-check  - drive the UI in headless Chrome (needs a running ghome)"
 	@echo "make clean     - remove build output"
 
 build:
@@ -35,6 +36,15 @@ tidy:
 	go mod tidy
 
 check: fmt vet test
+
+# The frontend has no build step and no Go tests, so this is where UI
+# regressions get caught. Point it at a running instance:
+#   make run &            # or any ghome
+#   make ui-check
+#   make ui-check UI_URL=http://127.0.0.1:8080/
+UI_URL ?= http://127.0.0.1:8080/
+ui-check:
+	@node scripts/ui-check.mjs $(UI_URL)
 
 # Static binaries for a server whose architecture you do not want to think
 # about: drop one on the box and run it, no runtime, no libc.

@@ -49,15 +49,19 @@ style:
 search:
   enabled: true           # (true) 关掉则不显示搜索框
   hotkey: "/"             # ("/") 按此键聚焦搜索框；Cmd/Ctrl+K 始终可用
-  engines:                # (空) 可选。没配就只做本地过滤，不做网页搜索
-    - name: Google
-      keyword: g          # 输入 "g 关键词" 回车直接用这个引擎搜
-      url: "https://www.google.com/search?q={q}"   # {q} 是必填占位符
-    - name: Bing
-      keyword: b
-      url: "https://www.bing.com/search?q={q}"
+  engines:                # (空) 可选。不配也完全可用：搜索框的主职是按
+                          #       名称/描述/标签过滤下面的链接，不需要外部服务
+    # 内部导航页里真正有用的是接内网自己的检索
     - name: 内网检索
       url: "https://search.example.com/?q={q}"     # 不写 keyword 就是默认引擎
+    - name: Wiki
+      keyword: w          # 输入 "w 关键词" 回车直接用这个引擎搜
+      url: "https://wiki.example.com/search?q={q}"  # {q} 是必填占位符
+    # 公网搜索引擎也能配，但先确认访问这个页面的网络真的打得开它。
+    # 配一个打不开的引擎，等于给了一个按下去只会转圈的死键。
+    # - name: Bing
+    #   keyword: b
+    #   url: "https://www.bing.com/search?q={q}"
 
 # ---------------------------------------------------------------- 服务状态灯
 # 默认关闭，关着的时候服务端一个探测请求都不发。
