@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"flag"
 	"io"
 	"log/slog"
 	"net/http"
@@ -282,24 +281,6 @@ func TestReportIconDirSaysWhatWillHappen(t *testing.T) {
 
 /* ---------- 命令行：命名与别名 ---------- */
 
-func TestEnvOrPrefersTheFirstSetName(t *testing.T) {
-	t.Setenv("GHOME_NEW_NAME", "")
-	t.Setenv("GHOME_OLD_NAME", "old-value")
-	if got := envOr("fallback", "GHOME_NEW_NAME", "GHOME_OLD_NAME"); got != "old-value" {
-		t.Errorf("envOr() = %q, want the old name's value when the new one is empty", got)
-	}
-
-	// The new name wins when both are set, so a rename is not silently ignored.
-	t.Setenv("GHOME_NEW_NAME", "new-value")
-	if got := envOr("fallback", "GHOME_NEW_NAME", "GHOME_OLD_NAME"); got != "new-value" {
-		t.Errorf("envOr() = %q, want the new name to win", got)
-	}
-
-	if got := envOr("fallback", "GHOME_NEITHER"); got != "fallback" {
-		t.Errorf("envOr() = %q, want the fallback", got)
-	}
-}
-
 func TestIsForge(t *testing.T) {
 	for _, kind := range []string{"gitea", "forgejo", "Gitea", " FORGEJO "} {
 		if !isForge(kind) {
@@ -315,45 +296,6 @@ func TestIsForge(t *testing.T) {
 
 // The aliases exist so existing deployments keep working, but showing two names
 // for every flag would make --help harder to read than the rename is worth.
-func TestPrintFlagsHidesTheDeprecatedAliases(t *testing.T) {
-	var url, ref string
-	fs := flag.NewFlagSet("test", flag.ContinueOnError)
-	fs.StringVar(&url, "forge-url", "", "the current name")
-	fs.StringVar(&ref, "forge-ref", "main", "a ref with a default")
-	fs.StringVar(&url, "gitea-url", "", "the old name")
-
-	var buf bytes.Buffer
-	printFlags(&buf, fs)
-	out := buf.String()
-
-	for _, want := range []string{"-forge-url", "-forge-ref", "(default main)"} {
-		if !strings.Contains(out, want) {
-			t.Errorf("--help output is missing %q:\n%s", want, out)
-		}
-	}
-	if strings.Contains(out, "-gitea-url") {
-		t.Errorf("a deprecated alias leaked into --help:\n%s", out)
-	}
-}
-
 // Every alias has to name a real flag: registration looks the target up and
 // dereferences it, so a stale entry would panic on startup rather than degrade
 // quietly. This pins the mapping itself.
-func TestForgeAliasesMapOldNamesToNew(t *testing.T) {
-	want := map[string]string{
-		"gitea-url":   "forge-url",
-		"gitea-owner": "forge-owner",
-		"gitea-repo":  "forge-repo",
-		"gitea-ref":   "forge-ref",
-		"gitea-path":  "forge-path",
-		"gitea-token": "forge-token",
-	}
-	if len(forgeAliases) != len(want) {
-		t.Fatalf("forgeAliases has %d entries, want %d", len(forgeAliases), len(want))
-	}
-	for alias, target := range want {
-		if got := forgeAliases[alias]; got != target {
-			t.Errorf("forgeAliases[%q] = %q, want %q", alias, got, target)
-		}
-	}
-}

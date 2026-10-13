@@ -9,7 +9,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -315,26 +314,18 @@ func parseFlags() options {
 		"where nav.yaml lives: file, gitea or forgejo")
 	fs.StringVar(&o.file, "file", env("GHOME_FILE", "nav.yaml"),
 		"path to nav.yaml when --source=file")
-	fs.StringVar(&o.forgeURL, "forge-url", envOr("", "GHOME_FORGE_URL", "GHOME_GITEA_URL"),
+	fs.StringVar(&o.forgeURL, "forge-url", env("GHOME_FORGE_URL", ""),
 		"forge base URL, for example https://git.example.com (sub-paths are fine)")
-	fs.StringVar(&o.forgeOwner, "forge-owner", envOr("", "GHOME_FORGE_OWNER", "GHOME_GITEA_OWNER"),
+	fs.StringVar(&o.forgeOwner, "forge-owner", env("GHOME_FORGE_OWNER", ""),
 		"repository owner or organisation")
-	fs.StringVar(&o.forgeRepo, "forge-repo", envOr("", "GHOME_FORGE_REPO", "GHOME_GITEA_REPO"),
+	fs.StringVar(&o.forgeRepo, "forge-repo", env("GHOME_FORGE_REPO", ""),
 		"repository name")
-	fs.StringVar(&o.forgeRef, "forge-ref", envOr("main", "GHOME_FORGE_REF", "GHOME_GITEA_REF"),
+	fs.StringVar(&o.forgeRef, "forge-ref", env("GHOME_FORGE_REF", "main"),
 		"branch, tag or commit to read")
-	fs.StringVar(&o.forgePath, "forge-path", envOr("nav.yaml", "GHOME_FORGE_PATH", "GHOME_GITEA_PATH"),
+	fs.StringVar(&o.forgePath, "forge-path", env("GHOME_FORGE_PATH", "nav.yaml"),
 		"file path inside the repository")
-	fs.StringVar(&o.forgeToken, "forge-token", envOr("", "GHOME_FORGE_TOKEN", "GHOME_GITEA_TOKEN"),
+	fs.StringVar(&o.forgeToken, "forge-token", env("GHOME_FORGE_TOKEN", ""),
 		"access token with read scope, needed for a private repository")
-
-	// The deprecated aliases reuse the target's flag.Value, so both names write
-	// the same variable and the last one on the command line wins. Deriving them
-	// from forgeAliases is what makes it impossible for the table and the
-	// registrations to disagree.
-	for alias, target := range forgeAliases {
-		fs.Var(fs.Lookup(target).Value, alias, "deprecated alias of --"+target)
-	}
 	fs.DurationVar(&o.poll, "poll", envDuration("GHOME_POLL", 60*time.Second),
 		"how often to re-check the config (the safety net behind webhooks)")
 	fs.StringVar(&o.webhookSecret, "webhook-secret", env("GHOME_WEBHOOK_SECRET", ""),
@@ -361,7 +352,7 @@ func parseFlags() options {
 		out := fs.Output()
 		fmt.Fprintf(out, "ghome %s — a git driven navigation page.\n\n", version)
 		fmt.Fprintf(out, "Usage:\n  ghome [flags]\n\nFlags:\n")
-		printFlags(out, fs)
+		fs.PrintDefaults()
 		fmt.Fprintf(out, `
 Examples:
   # Local file, ideal for trying it out
@@ -384,11 +375,6 @@ Examples:
 
 Every flag can also be set through the matching GHOME_* environment variable,
 which keeps tokens out of the process list.
-
-The --gitea-* flags (and GHOME_GITEA_* variables) are accepted as aliases of
---forge-* and are deliberately not listed above. They do exactly the same
-thing; --forge-* is the name to use, because Gitea and Forgejo are two
-products speaking one API.
 `)
 	}
 	// ExitOnError already handles the error; parsing cannot fail here.
@@ -493,63 +479,6 @@ func saveCache(path string, data []byte, log *slog.Logger) {
 	if err := os.Rename(tmp, path); err != nil {
 		log.Warn("could not replace the cache file", "path", path, "error", err)
 	}
-}
-
-// forgeAliases maps the deprecated --gitea-* names onto the --forge-* flag each
-// one stands in for.
-//
-// It is the single source of truth: the same table drives both registration and
-// the --help filter, so the two cannot drift apart. The aliases keep deployments
-// written before the rename working, but stay out of --help, because two names
-// for one flag is already one too many to explain.
-var forgeAliases = map[string]string{
-	"gitea-url":   "forge-url",
-	"gitea-owner": "forge-owner",
-	"gitea-repo":  "forge-repo",
-	"gitea-ref":   "forge-ref",
-	"gitea-path":  "forge-path",
-	"gitea-token": "forge-token",
-}
-
-// printFlags writes the flag list, skipping the deprecated aliases. It mirrors
-// the standard library's column layout so the output stays familiar.
-func printFlags(out io.Writer, fs *flag.FlagSet) {
-	const column = 22
-	fs.VisitAll(func(f *flag.Flag) {
-		if _, deprecated := forgeAliases[f.Name]; deprecated {
-			return
-		}
-		name, usage := flag.UnquoteUsage(f)
-
-		line := "  -" + f.Name
-		if name != "" {
-			line += " " + name
-		}
-		if len(line) < column {
-			line += strings.Repeat(" ", column-len(line))
-		} else {
-			line += "\n" + strings.Repeat(" ", column)
-		}
-		line += usage
-		if f.DefValue != "" && f.DefValue != "false" && f.DefValue != "0" {
-			line += " (default " + f.DefValue + ")"
-		}
-		fmt.Fprintln(out, line)
-	})
-}
-
-// envOr returns the first of keys that is set, or fallback.
-//
-// Several names are accepted so a renamed variable keeps working alongside its
-// new one, instead of silently falling back to a default for anyone who already
-// set the old name.
-func envOr(fallback string, keys ...string) string {
-	for _, key := range keys {
-		if v, ok := os.LookupEnv(key); ok && v != "" {
-			return v
-		}
-	}
-	return fallback
 }
 
 // isForge reports whether the source kind reads through the Gitea/Forgejo API.
