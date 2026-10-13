@@ -629,7 +629,17 @@ kbd {
 
 @media (max-width: 640px) {
   .app { padding: 20px 15px 30px; }
-  .group-grid, .skeleton-grid { grid-template-columns: 1fr; gap: 12px; }
+  /* Matches the specificity of the per-layout rules above and comes later in
+     the file, so it wins for every layout. As a bare `.group-grid` it lost to
+     `:root[data-layout="dashboard"] .group-grid`, which left dashboard showing
+     two cramped columns on a phone. */
+  :root[data-layout] .group-grid,
+  :root .group-grid,
+  .group-grid,
+  .skeleton-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
   .pinned-row { grid-template-columns: repeat(auto-fill, minmax(132px, 1fr)); }
   .brand-text h1 { font-size: calc(var(--font-size) + 3px); }
   .link-tags { display: none; }

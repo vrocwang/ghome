@@ -244,6 +244,33 @@ try {
   check('clearing the query restores every entry',
     restored.entries === baseline && !restored.empty, JSON.stringify(restored));
 
+  /* ---------- a narrow viewport must collapse every layout to one column ---------- */
+
+  // The per-layout rules are `:root[data-layout="…"] .group-grid`, which outranks
+  // a bare `.group-grid` inside a media query. A phone rule written that way
+  // silently loses for whichever layout declares its own columns -- dashboard
+  // kept two cramped columns at 390px until this was fixed.
+  const columnsAt = async (width, layout) => {
+    await send('Emulation.setDeviceMetricsOverride', {
+      width, height: 900, deviceScaleFactor: 1, mobile: true,
+    });
+    await evaluate(`document.documentElement.setAttribute('data-layout', ${JSON.stringify(layout)})`);
+    await new Promise((r) => setTimeout(r, 200));
+    return evaluate(
+      `getComputedStyle(document.querySelector('.group-grid')).gridTemplateColumns.split(' ').filter(Boolean).length`);
+  };
+
+  // 600px, not a phone width: the point is to catch the media query losing to a
+  // more specific rule. At 390px the dashboard columns do not fit side by side
+  // anyway, so the layout collapses to one column on its own and the assertion
+  // passes even when the rule is broken.
+  for (const layout of ['grid', 'dashboard', 'list']) {
+    const cols = await columnsAt(600, layout);
+    check(`a 600px viewport collapses ${layout} to a single column`, cols === 1, `columns=${cols}`);
+  }
+  await send('Emulation.clearDeviceMetricsOverride');
+  await evaluate(`document.documentElement.setAttribute('data-layout', ${JSON.stringify(shape.layout)})`);
+
   /* ---------- verdict ---------- */
 
   console.log('');
