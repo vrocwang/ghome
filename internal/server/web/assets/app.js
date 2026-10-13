@@ -698,10 +698,14 @@
   }
 
   function connect() {
-    if (!window.EventSource) {
-      startPolling();
-      return;
-    }
+    // Start the safety net now, and stop it only once a stream is actually
+    // established. Waiting for the stream to fail first is not enough: a
+    // connection that never completes leaves EventSource retrying forever, and
+    // a reconnect every few seconds keeps resetting the poll timer, so the page
+    // ends up with neither events nor polls and never notices a change.
+    startPolling();
+
+    if (!window.EventSource) return;
     if (state.source) state.source.close();
 
     var es = new EventSource('api/events');
@@ -730,9 +734,11 @@
     });
 
     es.addEventListener('error', function () {
+      // startPolling is a no-op while a timer is already running, which is what
+      // keeps a failing reconnect from pushing the next poll a further minute
+      // away every five seconds.
+      startPolling();
       if (es.readyState === 2) { // CLOSED: the browser will not retry for us
-        stopPolling();
-        startPolling();
         scheduleReconnect();
       }
     });
