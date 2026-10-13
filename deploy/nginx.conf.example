@@ -17,6 +17,16 @@ server {
     ssl_certificate     /etc/letsencrypt/live/nav.example.com/fullchain.pem;
     ssl_certificate_key /etc/letsencrypt/live/nav.example.com/privkey.pem;
 
+    # Optional: put a password on the UI.
+    #
+    # The browser answers the prompt once and then reuses the credentials for
+    # everything the page loads, including the live-update stream, so the UI and
+    # instant updates keep working. Verified against a real reverse proxy: one
+    # auth challenge for the whole page load, live update in 1.5s, no reload.
+    #
+    # auth_basic           "ghome";
+    # auth_basic_user_file /etc/nginx/ghome.htpasswd;
+
     # Optional: keep an internal tool off the public internet.
     # allow 10.0.0.0/8;
     # allow 192.168.0.0/16;
@@ -42,11 +52,30 @@ server {
         chunked_transfer_encoding on;
     }
 
-    # The Gitea webhook must reach the app untouched. Keep it off the public
-    # internet if you can, or at least rely on the HMAC secret.
-    # location = /api/webhook {
-    #     allow 10.0.0.5;
-    #     deny all;
-    #     proxy_pass http://ghome;
-    # }
+    # The webhook must NOT sit behind auth_basic.
+    #
+    # The forge cannot answer an interactive password prompt, so a protected
+    # /api/webhook answers 401 to Gitea/Forgejo and the instant update path dies
+    # -- silently, because polling still updates the page, just up to a minute
+    # later. The HMAC secret is what actually authenticates this endpoint; a bad
+    # signature is still rejected by ghome with 401.
+    #
+    # Only needed if you enabled auth_basic above (auth_basic inherits into
+    # nested locations, so it has to be turned off explicitly).
+    location = /api/webhook {
+        auth_basic off;
+
+        # A better second layer than a password the forge cannot send: restrict
+        # by source, if your forge has a stable address.
+        # allow 10.0.0.5;
+        # deny all;
+
+        proxy_pass http://ghome;
+        proxy_http_version 1.1;
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Connection        "";
+    }
 }
