@@ -1,9 +1,10 @@
 BINARY  := ghome
 VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+VCS_REF := $(shell git rev-parse --short HEAD 2>/dev/null || echo unknown)
 LDFLAGS := -s -w -X main.version=$(VERSION)
 BUILD   := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 
-.PHONY: help build run test race vet fmt tidy check ui-check cross clean
+.PHONY: help build run test race vet fmt tidy check ui-check cross docker clean
 
 help:
 	@echo "make build     - build bin/ghome for this machine"
@@ -11,6 +12,7 @@ help:
 	@echo "make cross     - build linux/amd64, linux/arm64 and darwin/arm64 into dist/"
 	@echo "make check     - fmt + vet + test"
 	@echo "make ui-check  - drive the UI in headless Chrome (needs a running ghome)"
+	@echo "make docker    - build the image, with the version passed in"
 	@echo "make clean     - remove build output"
 
 build:
@@ -55,6 +57,15 @@ cross:
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=arm64 $(BUILD) -o dist/$(BINARY)-darwin-arm64 .
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 $(BUILD) -o dist/$(BINARY)-darwin-amd64 .
 	@ls -lh dist
+
+# .git is excluded from the Docker build context on purpose (so a commit does not
+# bust the COPY layer cache), which means BuildKit cannot read the version and
+# warns about it. Pass it in instead of letting ghome report "dev".
+docker:
+	docker build \
+	  --build-arg VERSION=$(VERSION) \
+	  --build-arg VCS_REF=$(VCS_REF) \
+	  -t ghome .
 
 clean:
 	rm -rf bin dist

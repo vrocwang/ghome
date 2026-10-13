@@ -6,10 +6,28 @@
 # libc. Nothing to exploit and nothing to patch, which is what makes this
 # comfortable to leave running on a small box.
 
+# Declared before the first FROM so both stages see them.
+#
+# VERSION is what ghome reports from --version and in /healthz. It is passed in
+# rather than read from .git on purpose: .git is excluded from the context so
+# that a commit does not invalidate the COPY layer, which means BuildKit cannot
+# infer it and warns that "current commit information was not captured". Passing
+# it explicitly is quieter *and* more useful, because ghome actually prints it
+# instead of leaving it in image metadata nobody reads.
+#
+#   docker build --build-arg VERSION=$(git describe --tags --always --dirty) .
+#
+# `make docker` does that for you.
+ARG VERSION=dev
+ARG VCS_REF=unknown
+
 # --platform=$BUILDPLATFORM keeps the compiler native even when building for
 # another architecture, so `docker buildx build --platform linux/amd64,linux/arm64`
 # cross-compiles instead of emulating.
 FROM --platform=$BUILDPLATFORM golang:1.26-alpine AS build
+
+ARG VERSION
+ARG VCS_REF
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -26,12 +44,23 @@ RUN go mod download
 COPY . .
 # An empty GOOS/GOARCH means "host", so a plain `docker build` still works.
 RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH \
-    go build -trimpath -ldflags "-s -w" -o /out/ghome .
+    go build -trimpath -ldflags "-s -w -X main.version=$VERSION" -o /out/ghome .
 
 # A place for --cache-file, created here because scratch has no RUN to mkdir in.
 RUN mkdir -p /out/data && chown 65534:65534 /out/data
 
 FROM scratch
+
+ARG VERSION
+ARG VCS_REF
+
+# The metadata BuildKit was trying to fill in when it warned. Set explicitly so
+# the image is self-describing even though .git never enters the context.
+LABEL org.opencontainers.image.title="ghome" \
+      org.opencontainers.image.description="A navigation page whose content and styling live in git" \
+      org.opencontainers.image.version="$VERSION" \
+      org.opencontainers.image.revision="$VCS_REF" \
+      org.opencontainers.image.source="https://git.xhupo.com/simon/ghome"
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/ghome /ghome

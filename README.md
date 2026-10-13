@@ -468,7 +468,7 @@ journalctl -u ghome -f
 也没东西需要打补丁；以非 root（`65534`）运行。
 
 ```bash
-docker build -t ghome .
+make docker            # = docker build --build-arg VERSION=$(git describe ...) -t ghome .
 
 docker run -d --name ghome \
   --restart unless-stopped \
@@ -520,6 +520,27 @@ docker exec ghome /ghome --healthcheck       # 容器里查自己
 服务上一版页面。`--web-dir` / `--icon-dir` 需要把宿主目录以只读挂进去
 （`-v ./web:/srv/web:ro -e GHOME_WEB_DIR=/srv/web`），注意容器里的进程是 uid
 `65534`，宿主目录得给它读权限。
+
+**关于 `WARNING: current commit information was not captured by the build`。**
+这条警告是无害的——构建会成功——但它值得解释，因为它指向一个真问题。
+
+BuildKit 想读 `.git` 把 commit 塞进镜像的 OCI 元数据，而本项目的 `.dockerignore`
+**故意排除了 `.git`**：它每次提交都变，留着会让 `COPY . .` 的层缓存每次都失效。
+
+正确的应对不是把 `.git` 放回去（那是拿真实的构建缓存去换没人读的元数据），
+而是把版本号**显式传进去**：
+
+```bash
+docker build \
+  --build-arg VERSION="$(git describe --tags --always --dirty)" \
+  --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
+  -t ghome .
+```
+
+`make docker` 就是这条命令。这比 BuildKit 的自动推断更有用，因为 ghome 会
+**显示**它——`ghome --version` 和 `/healthz` 的 `version` 字段——而不是躺在
+镜像标签里没人看。不传的话镜像里报的是 `dev`；本地 `make build` 报的是
+commit，两者会对不上。
 
 **多架构。** Dockerfile 用 `--platform=$BUILDPLATFORM` 让编译器保持宿主架构，
 所以交叉编译而不是模拟：
