@@ -3,7 +3,9 @@ package source
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -186,7 +188,12 @@ func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 
 	rev := cr.SHA
 	if rev == "" {
-		rev = fmt.Sprintf("size:%d", len(data))
+		// Hash the content rather than falling back to its length. Two different
+		// documents of the same size would otherwise share a revision, so the
+		// watcher's fingerprint would not move and a real edit would never be
+		// published. The file source already revisions this way.
+		sum := sha256.Sum256(data)
+		rev = "sha256:" + hex.EncodeToString(sum[:])
 	}
 	return Snapshot{Data: data, Rev: rev}, nil
 }

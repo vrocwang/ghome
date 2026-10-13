@@ -113,6 +113,12 @@ type Resolver struct {
 	misses uint64
 
 	flights flightGroup
+
+	// warmSem bounds upstream fetches across every Warm call. The per-call
+	// worker count does not bound the total on its own: each config reload
+	// starts its own pool, so the number of sockets climbs with the number of
+	// reloads.
+	warmSem chan struct{}
 }
 
 // New builds a Resolver. Options are filled with defaults in place; Dir and
@@ -153,6 +159,7 @@ func New(opts Options) *Resolver {
 		allowed: map[string]struct{}{},
 		lru:     list.New(),
 		byKey:   map[string]*list.Element{},
+		warmSem: make(chan struct{}, warmWorkers),
 	}
 	// The client needs the allow list, not just the timeout: a redirect is
 	// chosen by the far end, so without this check any allowed host could hand
@@ -270,7 +277,13 @@ func (r *Resolver) warm(ctx context.Context, urls []string) {
 		go func() {
 			defer wg.Done()
 			for u := range jobs {
+				select {
+				case r.warmSem <- struct{}{}:
+				case <-ctx.Done():
+					return
+				}
 				_, _ = r.Lookup(ctx, u)
+				<-r.warmSem
 			}
 		}()
 	}

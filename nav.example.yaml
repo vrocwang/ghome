@@ -17,7 +17,6 @@ site:
   footer: "改完 push 即生效"   # (空)
 
 # ---------------------------------------------------------------- 外观
-theme: auto               # auto | light | dark，默认 auto（跟随系统）
                           # 用户手动切换后的选择存在浏览器里，优先级更高
 
 layout: grid              # grid | dashboard | list，默认 grid

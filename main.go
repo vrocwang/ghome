@@ -228,6 +228,10 @@ func run() error {
 
 	stop()
 	probes.stop()
+	// Event streams never end by themselves and Shutdown does not cancel
+	// in-flight request contexts, so they have to be asked to finish or every
+	// shutdown waits out the whole grace period.
+	srv.CloseEventStreams()
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
 	if err := httpSrv.Shutdown(shutdownCtx); err != nil {

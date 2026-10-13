@@ -23,6 +23,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
@@ -90,6 +91,25 @@ type Server struct {
 	idxMu  sync.Mutex
 	idx    map[string]string
 	idxRev string
+
+	// streams counts open event streams, and streamsDone is closed to ask them
+	// all to finish.
+	streams     atomic.Int64
+	streamsDone chan struct{}
+	streamsOnce sync.Once
+}
+
+// maxEventStreams caps concurrent SSE clients. A browser tab holds one, so this
+// is far above real use, and it stops a flood from pinning a goroutine and a
+// socket each.
+const maxEventStreams = 256
+
+// CloseEventStreams asks every open stream to end so that http.Server.Shutdown
+// can return. Shutdown does not cancel in-flight request contexts and a stream
+// is never idle, so without this every shutdown waits out the full grace period
+// and reports a timeout.
+func (s *Server) CloseEventStreams() {
+	s.streamsOnce.Do(func() { close(s.streamsDone) })
 }
 
 // New builds the handler tree.
@@ -114,7 +134,7 @@ func New(o Options) (*Server, error) {
 		o.WebDir = filepath.Clean(o.WebDir)
 	}
 
-	s := &Server{store: o.Store, opts: o, log: o.Logger}
+	s := &Server{store: o.Store, opts: o, log: o.Logger, streamsDone: make(chan struct{})}
 
 	embedded, err := fs.Sub(webRoot, "web")
 	if err != nil {
@@ -124,7 +144,7 @@ func New(o Options) (*Server, error) {
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", s.handleIndex)
-	mux.Handle("GET /assets/", s.cacheControl(http.FileServerFS(s.assets), "no-cache"))
+	mux.Handle("GET /assets/", s.cacheControl(s.filesOnly(http.FileServerFS(s.assets)), "no-cache"))
 	mux.HandleFunc("GET /theme.css", s.handleThemeCSS)
 	mux.HandleFunc("GET /favicon.ico", s.handleFavicon)
 	mux.HandleFunc("GET /api/nav", s.handleNav)
@@ -253,12 +273,27 @@ func (s *Server) withSecurityHeaders(next http.Handler) http.Handler {
 		h.Set("X-Frame-Options", "DENY")
 		// Nav links send people to third party sites; do not leak our URL.
 		h.Set("Referrer-Policy", "no-referrer")
-		// Icons are proxied through this origin, so nothing needs to be
-		// fetched from a third party by the browser any more.
+		// Favicons are proxied through this origin, but a config may also name
+		// an image url directly for a link icon or the site logo, and the
+		// operator owns that config. Restricting img-src to 'self' silently
+		// turned those into broken images, which read as "the feature is
+		// broken" rather than "this value was refused".
 		h.Set("Content-Security-Policy",
-			"default-src 'self'; img-src 'self' data:; "+
+			"default-src 'self'; img-src 'self' data: http: https:; "+
 				"style-src 'self'; script-src 'self'; connect-src 'self'; "+
 				"base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// filesOnly refuses directory requests. Everything under /assets/ is a file the
+// UI asks for by name, so a listing only advertises what happens to be on disk.
+func (s *Server) filesOnly(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, "/") {
+			http.NotFound(w, r)
+			return
+		}
 		next.ServeHTTP(w, r)
 	})
 }
@@ -525,6 +560,13 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if n := s.streams.Add(1); n > maxEventStreams {
+		s.streams.Add(-1)
+		http.Error(w, "too many event streams", http.StatusServiceUnavailable)
+		return
+	}
+	defer s.streams.Add(-1)
+
 	h := w.Header()
 	h.Set("Content-Type", "text/event-stream")
 	h.Set("Cache-Control", "no-cache, no-transform")
@@ -560,6 +602,8 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-s.streamsDone:
 			return
 		case _, open := <-updates:
 			if !open {

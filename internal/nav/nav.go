@@ -27,13 +27,6 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// Theme values accepted by Config.Theme.
-const (
-	ThemeAuto  = "auto"
-	ThemeLight = "light"
-	ThemeDark  = "dark"
-)
-
 // Layout values accepted by Config.Layout.
 const (
 	// LayoutGrid is the refined card layout: roomy, one card per group.
@@ -50,7 +43,6 @@ const DefaultTitle = "导航"
 // Config is the root of nav.yaml.
 type Config struct {
 	Site   Site    `yaml:"site" json:"site"`
-	Theme  string  `yaml:"theme" json:"theme"`
 	Layout string  `yaml:"layout" json:"layout"`
 	Style  Style   `yaml:"style" json:"style"`
 	Search Search  `yaml:"search" json:"search"`
@@ -359,16 +351,6 @@ func (c *Config) normalize() ([]string, error) {
 		c.Site.Title = DefaultTitle
 	}
 
-	c.Theme = strings.ToLower(strings.TrimSpace(c.Theme))
-	if c.Theme == "" {
-		c.Theme = ThemeAuto
-	}
-	switch c.Theme {
-	case ThemeAuto, ThemeLight, ThemeDark:
-	default:
-		p.addf("theme: %q is not one of auto, light, dark", c.Theme)
-	}
-
 	c.Layout = strings.ToLower(strings.TrimSpace(c.Layout))
 	if c.Layout == "" {
 		c.Layout = LayoutGrid
@@ -376,7 +358,10 @@ func (c *Config) normalize() ([]string, error) {
 	switch c.Layout {
 	case LayoutGrid, LayoutDashboard, LayoutList:
 	default:
-		p.addf("layout: %q is not one of grid, dashboard, list", c.Layout)
+		// Cosmetic: the page renders fine in the fallback layout, so rejecting
+		// the document over it would freeze the whole site on a typo.
+		warn("layout: %q is not one of grid, dashboard, list, using %s", c.Layout, LayoutGrid)
+		c.Layout = LayoutGrid
 	}
 
 	c.normalizeStyle(warn)
@@ -389,7 +374,8 @@ func (c *Config) normalize() ([]string, error) {
 		c.Search.Hotkey = "/"
 	}
 	if len([]rune(c.Search.Hotkey)) > 1 {
-		p.addf("search.hotkey: must be a single character")
+		warn("search.hotkey: %q is not a single character, using /", c.Search.Hotkey)
+		c.Search.Hotkey = "/"
 	}
 
 	engines := make([]Engine, 0, len(c.Search.Engines))
@@ -455,7 +441,9 @@ func (c *Config) normalize() ([]string, error) {
 				p.addf("groups[%d].links[%d] (%s).url: %v", gi, li, l.Name, err)
 			}
 			if len([]rune(l.Hotkey)) > 1 {
-				p.addf("groups[%d].links[%d] (%s).hotkey: must be a single character", gi, li, l.Name)
+				warn("groups[%d].links[%d] (%s).hotkey: %q is not a single character, ignored",
+					gi, li, l.Name, l.Hotkey)
+				l.Hotkey = ""
 			}
 			l.Icon = strings.TrimSpace(l.Icon)
 			if l.Icon != "" && !usableIcon(l.Icon) {
@@ -649,14 +637,40 @@ func CSSColor(v string) bool {
 		return true
 	}
 
-	// A bare keyword: transparent, currentColor, rebeccapurple, ...
-	for _, r := range v {
-		if !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '-' {
-			return false
-		}
-	}
-	return true
+	// A bare keyword. It must be one CSS actually defines: a typo such as
+	// "bleu" is syntactically fine, gets emitted verbatim, and is then dropped
+	// by the browser, so the page silently keeps its default and nothing says
+	// why.
+	return cssColorKeywords[strings.ToLower(v)]
 }
+
+// cssColorKeywords is every colour word CSS defines, plus the global keywords
+// that are valid in any property. Kept as one string so the list is easy to
+// read and impossible to miss an entry in.
+var cssColorKeywords = func() map[string]bool {
+	const names = "aliceblue antiquewhite aqua aquamarine azure beige bisque black blanchedalmond blue " +
+		"blueviolet brown burlywood cadetblue chartreuse chocolate coral cornflowerblue cornsilk crimson " +
+		"cyan darkblue darkcyan darkgoldenrod darkgray darkgreen darkgrey darkkhaki darkmagenta " +
+		"darkolivegreen darkorange darkorchid darkred darksalmon darkseagreen darkslateblue darkslategray " +
+		"darkslategrey darkturquoise darkviolet deeppink deepskyblue dimgray dimgrey dodgerblue firebrick " +
+		"floralwhite forestgreen fuchsia gainsboro ghostwhite gold goldenrod gray green greenyellow grey " +
+		"honeydew hotpink indianred indigo ivory khaki lavender lavenderblush lawngreen lemonchiffon " +
+		"lightblue lightcoral lightcyan lightgoldenrodyellow lightgray lightgreen lightgrey lightpink " +
+		"lightsalmon lightseagreen lightskyblue lightslategray lightslategrey lightsteelblue lightyellow " +
+		"lime limegreen linen magenta maroon mediumaquamarine mediumblue mediumorchid mediumpurple " +
+		"mediumseagreen mediumslateblue mediumspringgreen mediumturquoise mediumvioletred midnightblue " +
+		"mintcream mistyrose moccasin navajowhite navy oldlace olive olivedrab orange orangered orchid " +
+		"palegoldenrod palegreen paleturquoise palevioletred papayawhip peachpuff peru pink plum " +
+		"powderblue purple rebeccapurple red rosybrown royalblue saddlebrown salmon sandybrown seagreen " +
+		"seashell sienna silver skyblue slateblue slategray slategrey snow springgreen steelblue tan teal " +
+		"thistle tomato turquoise violet wheat white whitesmoke yellow yellowgreen"
+	const globals = "transparent currentcolor inherit initial unset revert revert-layer"
+	m := make(map[string]bool, 160)
+	for _, n := range strings.Fields(names + " " + globals) {
+		m[n] = true
+	}
+	return m
+}()
 
 // CSSFontFamily allows a font stack but nothing that could close the property
 // and start a new one.

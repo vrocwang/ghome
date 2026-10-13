@@ -566,7 +566,7 @@
     var match = keywordMatch(query);
     var engine = match ? match.engine : list[0];
     var term = match ? match.query : query;
-    window.open(engine.url.replace('{q}', encodeURIComponent(term)), '_blank', 'noopener');
+    window.open(engine.url.split('{q}').join(encodeURIComponent(term)), '_blank', 'noopener');
     return true;
   }
 

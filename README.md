@@ -359,7 +359,6 @@ site:
   logo: "🧭"              # (空) emoji、短字符或图片 URL
   footer: "改完 push 即生效"  # (空)
 
-theme: auto               # auto | light | dark —— 用户手动切换后以用户选择为准
 layout: grid              # grid | dashboard | list
 
 style: { ... }            # 见「改样式不用重新编译」
@@ -397,6 +396,9 @@ groups:                   # 至少要有一个分组、一个链接
         pinned: false                    # (false)
         probe: true                      # (true)
 ```
+
+主题只由用户切换（页面右上角的开关、`T` 键，或跟随系统），没有配置项——
+一个"默认主题"既会和用户的选择打架，又会让人以为配置坏了。
 
 **页面上能用的键**：`/`（或你配的 `hotkey`）聚焦搜索 · `↑` `↓` 选择 · `Enter` 打开 · `Esc` 清空 · `T` 切主题 · 每个链接自己的 `hotkey`（优先于全局键）· `Cmd/Ctrl+K` 搜索 · `Cmd/Ctrl+Enter` 用搜索引擎搜当前词。
 
@@ -750,6 +752,21 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `--version` | | | 打印版本后退出 |
 
 `--forge-ref` 写完整 commit SHA 时，webhook 的分支过滤会自动关闭（否则推任何分支都匹配不上，通知会被全部忽略）。
+
+### 校验分级
+
+配置里的问题分两类处理，这条规则决定了"一个错别字会不会把整页弄没"：
+
+- **结构性问题**（YAML 坏了、链接没有 `url`、`url` 是 `javascript:`、搜索引擎 url 没有 `{q}`、一个链接都没有）
+  → **整份文档拒收**，页面继续服务上一版可用配置，`/healthz` 报 `degraded`。
+  这些会让页面**撒谎**，所以宁可不发。
+- **表面问题**（拼错的 `layout`、非法的热键、不认得的颜色词、超范围的字号、未知字段）
+  → **只在页面顶部和 `/healthz` 里警告**，该项回退到默认值，其余照常。
+  页面还能正常工作，为一个错别字把整站冻住是更糟的结果。
+
+举个例子：`layout: masonry` 会用 `grid` 渲染并给一条警告；`style.accent: bleu`
+会被丢弃并给一条警告（而不是把 `bleu` 原样发出去让浏览器静默忽略）；
+但 `url: javascript:alert(1)` 会让整份文档被拒。
 
 ---
 

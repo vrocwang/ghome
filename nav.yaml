@@ -9,7 +9,6 @@ site:
   logo: "🧭"
   footer: "配置托管在 git · 改完 push 即生效"
 
-theme: auto        # auto | light | dark
 layout: grid       # grid（精致卡片）| dashboard（紧凑密集）| list（单列）
 
 # 外观令牌：改这里就等于改样式，push 即生效，不需要重新编译。

@@ -38,9 +38,6 @@ func TestParseAppliesDefaults(t *testing.T) {
 	if cfg.Site.Title != DefaultTitle {
 		t.Errorf("Site.Title = %q, want %q", cfg.Site.Title, DefaultTitle)
 	}
-	if cfg.Theme != ThemeAuto {
-		t.Errorf("Theme = %q, want %q", cfg.Theme, ThemeAuto)
-	}
 	if cfg.Layout != LayoutGrid {
 		t.Errorf("Layout = %q, want %q", cfg.Layout, LayoutGrid)
 	}
@@ -216,7 +213,6 @@ func TestParseRequiresAtLeastOneLink(t *testing.T) {
 
 func TestParseTrimsAndCleansLists(t *testing.T) {
 	cfg := mustParse(t, `
-theme: "  DARK "
 layout: DASHBOARD
 groups:
   - name: "  开发  "
@@ -226,8 +222,8 @@ groups:
         tags: ["  git ", "", "   "]
         hotkey: " g "
 `)
-	if cfg.Theme != ThemeDark || cfg.Layout != LayoutDashboard {
-		t.Errorf("Theme/Layout = %q/%q, want dark/dashboard", cfg.Theme, cfg.Layout)
+	if cfg.Layout != LayoutDashboard {
+		t.Errorf("Layout = %q, want dashboard", cfg.Layout)
 	}
 	link := cfg.Groups[0].Links[0]
 	if link.Name != "Gitea" || link.URL != "https://git.example.com" || link.Hotkey != "g" {
@@ -235,12 +231,6 @@ groups:
 	}
 	if len(link.Tags) != 1 || link.Tags[0] != "git" {
 		t.Errorf("Tags = %v, want [git]", link.Tags)
-	}
-}
-
-func TestParseRejectsBadLayout(t *testing.T) {
-	if _, _, err := Parse([]byte("layout: masonry\n" + minimalDoc)); err == nil {
-		t.Fatal("Parse() accepted an unknown layout")
 	}
 }
 
@@ -255,15 +245,71 @@ search:
 	}
 }
 
-func TestParseRejectsMultiCharacterHotkey(t *testing.T) {
-	cases := []string{
-		"groups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n        hotkey: gh\n",
-		"search:\n  hotkey: ab\n" + minimalDoc,
+// A hotkey that cannot work is a cosmetic mistake: the page still renders and
+// every link still works, so it warns and falls back rather than rejecting the
+// document and freezing the whole site on one typo.
+func TestParseWarnsAndFallsBackOnMultiCharacterHotkey(t *testing.T) {
+	cfg, warnings, err := Parse([]byte(
+		"groups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n        hotkey: gh\n"))
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want the document accepted", err)
 	}
-	for _, doc := range cases {
-		if _, _, err := Parse([]byte(doc)); err == nil {
-			t.Error("Parse() accepted a multi-character hotkey")
-		}
+	if got := cfg.Groups[0].Links[0].Hotkey; got != "" {
+		t.Errorf("link hotkey = %q, want it dropped", got)
+	}
+	if len(warnings) == 0 {
+		t.Error("no warning was reported for the dropped hotkey")
+	}
+
+	cfg, warnings, err = Parse([]byte("search:\n  hotkey: ab\n" + minimalDoc))
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want the document accepted", err)
+	}
+	if got := cfg.Search.Hotkey; got != "/" {
+		t.Errorf("search hotkey = %q, want the default /", got)
+	}
+	if len(warnings) == 0 {
+		t.Error("no warning was reported for the search hotkey")
+	}
+}
+
+// The same reasoning applies to a misspelled layout: fall back, say so, keep
+// serving.
+func TestParseWarnsAndFallsBackOnUnknownLayout(t *testing.T) {
+	cfg, warnings, err := Parse([]byte("layout: masonry\n" + minimalDoc))
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want the document accepted", err)
+	}
+	if cfg.Layout != LayoutGrid {
+		t.Errorf("Layout = %q, want the %s fallback", cfg.Layout, LayoutGrid)
+	}
+	if len(warnings) == 0 {
+		t.Error("no warning was reported for the unknown layout")
+	}
+}
+
+// A misspelled colour word used to be emitted verbatim and dropped by the
+// browser, so the page silently kept its default and nothing said why.
+func TestParseWarnsOnUnknownColorKeyword(t *testing.T) {
+	cfg, warnings, err := Parse([]byte("style:\n  accent: bleu\n" + minimalDoc))
+	if err != nil {
+		t.Fatalf("Parse() error = %v, want the document accepted", err)
+	}
+	if cfg.Style.Accent != "" {
+		t.Errorf("accent = %q, want the unusable value dropped", cfg.Style.Accent)
+	}
+	if len(warnings) == 0 {
+		t.Error("no warning was reported for the unknown colour")
+	}
+
+	// The real colour words must still pass.
+	cfg, _, err = Parse([]byte("style:\n  accent: rebeccapurple\n  background: transparent\n" + minimalDoc))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Style.Accent != "rebeccapurple" || cfg.Style.Background != "transparent" {
+		t.Errorf("valid colour words were dropped: accent=%q background=%q",
+			cfg.Style.Accent, cfg.Style.Background)
 	}
 }
 
