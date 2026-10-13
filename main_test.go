@@ -299,3 +299,69 @@ func TestIsForge(t *testing.T) {
 // Every alias has to name a real flag: registration looks the target up and
 // dereferences it, so a stale entry would panic on startup rather than degrade
 // quietly. This pins the mapping itself.
+
+/* ---------- 容器健康检查 ---------- */
+
+// A scratch image has no shell and no curl, so `ghome --healthcheck` is the only
+// way to probe the process from inside.
+func TestRunHealthcheck(t *testing.T) {
+	serve := func(code int) (*httptest.Server, options) {
+		t.Helper()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/healthz" {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			w.WriteHeader(code)
+			if code != http.StatusOK {
+				_, _ = w.Write([]byte(`{"status":"error"}`))
+			}
+		}))
+		t.Cleanup(srv.Close)
+		// Point --listen at the test server so the derived URL hits it.
+		return srv, options{listen: strings.TrimPrefix(srv.URL, "http://")}
+	}
+
+	t.Run("200 is healthy", func(t *testing.T) {
+		_, o := serve(http.StatusOK)
+		if err := runHealthcheck(o); err != nil {
+			t.Errorf("runHealthcheck() = %v, want nil", err)
+		}
+	})
+
+	// 503 means "running but no usable config yet". That must not read as
+	// healthy, or a container would sit there serving nothing.
+	t.Run("503 is unhealthy", func(t *testing.T) {
+		_, o := serve(http.StatusServiceUnavailable)
+		err := runHealthcheck(o)
+		if err == nil {
+			t.Fatal("runHealthcheck() = nil, want an error for 503")
+		}
+		if !strings.Contains(err.Error(), "503") {
+			t.Errorf("error = %v, want it to name the status", err)
+		}
+	})
+
+	t.Run("nothing listening is unhealthy", func(t *testing.T) {
+		err := runHealthcheck(options{listen: "127.0.0.1:1"})
+		if err == nil {
+			t.Error("runHealthcheck() = nil against a closed port")
+		}
+	})
+
+	t.Run("a base path is respected", func(t *testing.T) {
+		var got string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			got = r.URL.Path
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer srv.Close()
+		o := options{listen: strings.TrimPrefix(srv.URL, "http://"), basePath: "/nav"}
+		if err := runHealthcheck(o); err != nil {
+			t.Fatalf("runHealthcheck() = %v", err)
+		}
+		if got != "/nav/healthz" {
+			t.Errorf("probed %q, want /nav/healthz", got)
+		}
+	})
+}

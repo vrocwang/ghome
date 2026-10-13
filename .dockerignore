@@ -1,0 +1,27 @@
+# The build reads Go sources, go.mod/go.sum and the embedded web assets. Nothing
+# else belongs in the context.
+#
+# .git matters most: it changes on every commit, so leaving it in would bust the
+# `COPY . .` layer cache even when no source file changed.
+
+.git
+.gitignore
+.github
+
+# Local build output. dist/ alone is ~29 MB of cross-compiled binaries.
+bin/
+dist/
+
+# Not compiled into anything.
+docs/
+scripts/
+deploy/
+*.md
+!README.md
+
+# Runtime state, never image content.
+ghome-cache.yaml
+*.tmp
+
+.DS_Store
+**/.DS_Store

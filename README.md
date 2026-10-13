@@ -463,17 +463,75 @@ journalctl -u ghome -f
 
 ### Docker
 
+镜像分两阶段：`golang:alpine` 编译，然后只把**静态二进制 + CA 证书**拷进
+`scratch`。最终镜像约 7 MB，没有 shell、没有包管理器、没有 libc——没东西可利用，
+也没东西需要打补丁；以非 root（`65534`）运行。
+
 ```bash
 docker build -t ghome .
-docker run -d --name ghome -p 8080:8080 \
-  -e GHOME_SOURCE=gitea \
-  -e GHOME_FORGE_URL=https://git.example.com \
+
+docker run -d --name ghome \
+  --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  -v ghome-data:/data \
+  -e GHOME_SOURCE=forgejo \
+  -e GHOME_FORGE_URL=https://git.xhupo.com \
   -e GHOME_FORGE_OWNER=simon -e GHOME_FORGE_REPO=homepage \
-  -e GHOME_FORGE_TOKEN=... -e GHOME_WEBHOOK_SECRET=... \
+  -e GHOME_FORGE_TOKEN=... \
+  -e GHOME_WEBHOOK_SECRET=... \
   ghome
 ```
 
-镜像是 `scratch` + CA 证书，非 root（`65534`）运行。
+镜像自带的默认参数是 `--listen=:8080 --cache-file=/data/cache.yaml`，所以上面
+不用重复写。
+
+> **坑一：给 `docker run` 传任何参数会整体替换掉这些默认值。**
+> `docker run ghome --source=file` 会丢掉 `--listen`，容器起来就不监听
+> 任何端口。要覆盖就写全：
+> `docker run -p 8080:8080 ghome --listen=:8080 --cache-file=/data/cache.yaml --source=file`
+
+> **坑二：优先用环境变量，别用命令行参数。**
+> 镜像的 `HEALTHCHECK` 跑的是 `/ghome --healthcheck`，它**不继承**你的 CMD
+> 参数，只读环境变量。所以如果你用 `--listen=:9000` 或 `--base-path=/nav`
+> 这样的参数去改地址，健康检查仍会去探默认的 `:8080/healthz`，结果永远是
+> 不健康。用 `GHOME_LISTEN` / `GHOME_BASE_PATH` 就没有这个问题，而这也正是
+> 十二要素应用的推荐姿势。
+
+**Compose** 见 [`deploy/docker-compose.example.yml`](deploy/docker-compose.example.yml)：
+
+```bash
+cp deploy/ghome.env.example deploy/ghome.env   # 填 forge 设置和密钥
+docker compose -f deploy/docker-compose.example.yml up -d --build
+```
+
+**健康检查。** `scratch` 里没有 curl 也没有 shell，所以镜像的 `HEALTHCHECK`
+调的是二进制自己：`ghome --healthcheck` 去请求 `/healthz`，
+**只有 HTTP 200 才算健康**。503（进程活着但配置还没加载出来）会被判为不健康——
+那正是重启该解决的问题，而单纯探端口会把它当成正常。
+
+你也可以手动用：
+
+```bash
+docker run --rm ghome --healthcheck          # 用默认 listen 地址
+docker exec ghome /ghome --healthcheck       # 容器里查自己
+```
+
+**卷。** `/data` 是给 `--cache-file` 的，挂上之后重启期间哪怕 forge 连不上也还能
+服务上一版页面。`--web-dir` / `--icon-dir` 需要把宿主目录以只读挂进去
+（`-v ./web:/srv/web:ro -e GHOME_WEB_DIR=/srv/web`），注意容器里的进程是 uid
+`65534`，宿主目录得给它读权限。
+
+**多架构。** Dockerfile 用 `--platform=$BUILDPLATFORM` 让编译器保持宿主架构，
+所以交叉编译而不是模拟：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t ghome --push .
+```
+
+普通 `docker build` 也照常工作（`GOOS`/`GOARCH` 为空时 Go 回退到宿主）。
+
+**不用 Docker 也行。** `make cross` 产出的就是同一个静态二进制，`scp` 上服务器
+直接跑，连容器运行时都省了——这是这个项目在低配机器上的默认姿势。
 
 ### nginx 反代
 

@@ -5,10 +5,12 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -54,6 +56,7 @@ type options struct {
 	iconDir       string
 	logLevel      string
 	dumpWeb       string
+	healthcheck   bool
 	showVersion   bool
 }
 
@@ -69,6 +72,10 @@ func run() error {
 	if o.showVersion {
 		fmt.Println("ghome " + version)
 		return nil
+	}
+
+	if o.healthcheck {
+		return runHealthcheck(o)
 	}
 
 	// Extracting the UI needs no config, no git host and no listener.
@@ -344,6 +351,8 @@ func parseFlags() options {
 		"directory of local icon files named <host>.png/.svg/.ico, used before fetching a site")
 	fs.StringVar(&o.logLevel, "log-level", env("GHOME_LOG_LEVEL", "info"),
 		"log level: debug, info, warn or error")
+	fs.BoolVar(&o.healthcheck, "healthcheck", false,
+		"check a running instance's /healthz and exit; for container health checks")
 	fs.StringVar(&o.dumpWeb, "dump-web", "",
 		"write the embedded UI to this directory and exit (a starting point for --web-dir)")
 	fs.BoolVar(&o.showVersion, "version", false, "print the version and exit")
@@ -479,6 +488,32 @@ func saveCache(path string, data []byte, log *slog.Logger) {
 	if err := os.Rename(tmp, path); err != nil {
 		log.Warn("could not replace the cache file", "path", path, "error", err)
 	}
+}
+
+// runHealthcheck is what a container health check calls.
+//
+// A scratch image has no shell and no curl, so the binary has to be able to
+// check itself. It exits 0 only on HTTP 200: a 503 means the process is up but
+// still has no usable config, which is exactly the state a restart should fix
+// and which a naive "is the port open" probe would call healthy.
+func runHealthcheck(o options) error {
+	// displayURL already maps a wildcard listen address onto loopback, which is
+	// where the check has to go from inside the container.
+	target := displayURL(o.listen, o.basePath) + "healthz"
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	res, err := client.Get(target)
+	if err != nil {
+		return fmt.Errorf("health check %s: %w", target, err)
+	}
+	defer func() { _ = res.Body.Close() }()
+
+	if res.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(res.Body, 256))
+		return fmt.Errorf("health check %s: HTTP %d: %s",
+			target, res.StatusCode, bytes.TrimSpace(body))
+	}
+	return nil
 }
 
 // isForge reports whether the source kind reads through the Gitea/Forgejo API.
