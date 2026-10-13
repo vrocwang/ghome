@@ -126,7 +126,18 @@ style:
   customCss: "custom.css"
 ```
 
-它的内容会被追加到 `/theme.css` 后面，也就是内嵌样式表和所有令牌**之后**，所以天然优先级更高。改它同样只需要 push——`custom.css` 是跟着 `nav.yaml` 一起拉取的，它的版本号也参与"有没有变化"的判断。
+它的内容会被追加到 `/theme.css` 后面，也就是内嵌样式表和所有令牌**之后**，所以天然优先级更高。改它同样只需要 push。
+
+**只改 `custom.css`、不动 `nav.yaml` 也能热更新**，这一点值得说明，因为它踩了一个坑：`nav.yaml` 的 blob SHA 在这种情况下不会变，如果浏览器拿它当"要不要重新拉样式表"的依据，页面就会一直显示旧样式直到有人手动刷新。所以 `/api/nav` 的 `meta` 里有两个 revision：
+
+| 字段 | 是什么 | 变了代表 |
+| --- | --- | --- |
+| `revision` | `nav.yaml` 的 git blob SHA | 配置内容变了 |
+| `themeRevision` | 覆盖**两份文件**的短哈希 | 配置**或**样式表变了 |
+
+浏览器用 `themeRevision` 决定要不要重新拉 `/theme.css`（它同时是 cache buster），用 `revision` 决定要不要重绘整个页面。两者由服务端在同一个原子操作里发布，所以不存在"样式更新了但配置还是旧的"这种中间态。
+
+`/healthz` 里两个值都能看到，出问题时直接在终端确认。
 
 起点见 [`custom.css.example`](custom.css.example)，里面列了所有可用变量。适合：内嵌样式表没暴露成令牌的细节、给某个分组单独开小灶、加一层纯 CSS 装饰。
 
@@ -221,6 +232,7 @@ git commit -am "改个标题" && git push
         │                        解析 + 校验整份 YAML
         │                          ├─ 通过 → 换上新配置，广播 SSE
         │                          └─ 不通过 → 保持旧配置，/healthz 标 degraded
+        │                       两份文件的修订号合成 themeRevision
         │                              │
         ▼                              ▼
    60s 轮询兜底 ─────────────▶   GET /api/events  (浏览器长连接)
@@ -493,7 +505,8 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
   "status": "ok",              // ok | degraded | error | starting
   "version": "v1.0.0",
   "source": "gitea:simon/nav/nav.yaml@main",
-  "revision": "3f2a1b...",     // git blob SHA
+  "revision": "3f2a1b...",     // nav.yaml 的 git blob SHA
+  "themeRevision": "tc1b87a...", // nav.yaml + custom.css 的合成修订号
   "updatedAt": "2026-10-12T10:18:40Z",
   "groups": 3, "links": 10,
   "subscribers": 2,            // 当前挂着的浏览器/SSE 连接数
@@ -551,6 +564,8 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 **为什么 webhook 之外还留轮询？** webhook 是"尽力而为"的：Gitea 重启期间、网络抖动、密钥改错、钩子被人误删——任何一种都会让更新静默停掉，而**静默停掉是最难发现的故障**。60 秒轮询是那份保险。
 
 **为什么坏配置不覆盖好配置？** 导航页是入口，挂掉影响所有人。宁可让一个人看到自己的改动没生效（`/healthz` 里明写着原因），也不能让所有人打开是一片错误页。
+
+**为什么有两个 revision？** 因为配置和样式是两次独立的读。只改 `custom.css` 时配置的 blob SHA 不动，用一个 revision 兼做"要不要重拉样式表"的依据就会漏掉这种推送——页面会一直显示旧样式，而且只在"有人手动刷新"时才恢复，属于最难发现的那类 bug。拆成两个之后，`revision` 保持"配置内容"的准确语义（`/healthz` 里报的就是它），`themeRevision` 专门负责样式刷新决策，覆盖两份文件。这个坑是在把 Gitea 路径单独跑通时才暴露出来的：本地文件模式下同时改两个文件很自然，掩盖了它。
 
 **为什么未知字段只警告不报错？** 我一开始是硬失败的，理由是"拼错的字段会静默不生效"。但真实代价是：改一个可选字段打错一个字，整页配置作废、页面停更——这个惩罚和错误严重程度不成比例。现在的分界是：**会让页面撒谎的问题硬失败，只是某一项没生效的问题警告**。两种情况你都看得见。
 

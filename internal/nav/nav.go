@@ -156,13 +156,18 @@ type Link struct {
 // Meta describes where the loaded revision came from. It is filled in by the
 // server, never by nav.yaml.
 type Meta struct {
-	Revision    string    `json:"revision"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	Source      string    `json:"source"`
-	GroupCount  int       `json:"groupCount"`
-	LinkCount   int       `json:"linkCount"`
-	PinnedCount int       `json:"pinnedCount"`
-	Warnings    []string  `json:"warnings,omitempty"`
+	Revision string `json:"revision"`
+	// ThemeRevision changes whenever either the document or its stylesheet
+	// changes. The browser compares it to decide whether its copy of
+	// /theme.css is stale. Using Revision alone would miss a push that only
+	// touched custom.css, because the document's blob SHA does not move.
+	ThemeRevision string    `json:"themeRevision,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	Source        string    `json:"source"`
+	GroupCount    int       `json:"groupCount"`
+	LinkCount     int       `json:"linkCount"`
+	PinnedCount   int       `json:"pinnedCount"`
+	Warnings      []string  `json:"warnings,omitempty"`
 }
 
 // Payload is the JSON shape served by GET /api/nav: the config inlined plus

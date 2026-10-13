@@ -54,6 +54,7 @@
     selected: -1,
     dotNodes: [],     // { url, el } so status updates can patch in place
     renderedRev: null,
+    renderedThemeRev: null,
     lastFetch: 0,
     pollTimer: null,
     source: null,
@@ -587,11 +588,11 @@
     els.themeToggle.title = '主题：' + themeLabel() + '（点击切换，快捷键 T）';
   }
 
-  // The stylesheet is generated from the config, so a push that changes a
-  // colour has to bust the browser's copy of it.
-  function applyThemeSheet(revision) {
+  // The stylesheet is generated from the config plus the repository's
+  // custom.css, so a push that changes either has to bust the browser's copy.
+  function applyThemeSheet(marker) {
     if (!els.themeSheet) return;
-    els.themeSheet.setAttribute('href', 'theme.css?v=' + encodeURIComponent((revision || '').slice(0, 12)));
+    els.themeSheet.setAttribute('href', 'theme.css?v=' + encodeURIComponent(marker || '0'));
   }
 
   /* ---------- data loading ---------- */
@@ -639,16 +640,31 @@
       return;
     }
 
-    var revision = state.config.meta && state.config.meta.revision;
-    if (revision !== state.renderedRev) {
+    var meta = state.config.meta || {};
+    var revision = meta.revision;
+    var themeRevision = meta.themeRevision || revision;
+
+    // The stylesheet is tracked separately from the document on purpose: a
+    // push that only touches custom.css leaves the config revision untouched,
+    // so gating the stylesheet on it would leave a live page showing stale
+    // styling until somebody reloaded.
+    var themeChanged = themeRevision !== state.renderedThemeRev;
+    var navChanged = revision !== state.renderedRev;
+
+    if (themeChanged) {
+      state.renderedThemeRev = themeRevision;
+      applyThemeSheet(themeRevision);
+    }
+
+    if (navChanged) {
       state.renderedRev = revision;
-      applyThemeSheet(revision);
       var scrollY = window.scrollY;
       render();
       window.scrollTo(0, scrollY);
       if (options.notify) toast('导航已更新');
     } else {
       applyStatus();
+      if (options.notify && themeChanged) toast('样式已更新');
     }
     hideState();
   }

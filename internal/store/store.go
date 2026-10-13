@@ -7,6 +7,8 @@
 package store
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"sync"
 	"time"
 
@@ -55,13 +57,14 @@ func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings [
 	s.payload = nav.Payload{
 		Config: *cfg,
 		Meta: nav.Meta{
-			Revision:    rev,
-			UpdatedAt:   s.now().UTC(),
-			Source:      src,
-			GroupCount:  len(cfg.Groups),
-			LinkCount:   cfg.LinkCount(),
-			PinnedCount: cfg.PinnedCount(),
-			Warnings:    warnings,
+			Revision:      rev,
+			ThemeRevision: themeRevision(rev, cssRev),
+			UpdatedAt:     s.now().UTC(),
+			Source:        src,
+			GroupCount:    len(cfg.Groups),
+			LinkCount:     cfg.LinkCount(),
+			PinnedCount:   cfg.PinnedCount(),
+			Warnings:      warnings,
 		},
 	}
 	s.loaded = true
@@ -192,4 +195,12 @@ func (s *Store) SubscriberCount() int {
 	s.subsMu.Lock()
 	defer s.subsMu.Unlock()
 	return len(s.subs)
+}
+
+// themeRevision derives a short marker covering both the document and its
+// stylesheet, so a change to either one is visible to the browser as a new
+// cache key for /theme.css.
+func themeRevision(navRev, cssRev string) string {
+	sum := sha256.Sum256([]byte(navRev + "|" + cssRev))
+	return "t" + hex.EncodeToString(sum[:6])
 }

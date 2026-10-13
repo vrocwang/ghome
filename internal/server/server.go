@@ -594,15 +594,16 @@ func (s *Server) handleRefresh(w http.ResponseWriter, r *http.Request) {
 // healthState is the /healthz payload. It reports the last error but never any
 // credential.
 type healthState struct {
-	Status      string    `json:"status"`
-	Version     string    `json:"version"`
-	Source      string    `json:"source"`
-	Revision    string    `json:"revision"`
-	UpdatedAt   time.Time `json:"updatedAt"`
-	Groups      int       `json:"groups"`
-	Links       int       `json:"links"`
-	Subscribers int       `json:"subscribers"`
-	Uptime      string    `json:"uptime"`
+	Status        string    `json:"status"`
+	Version       string    `json:"version"`
+	Source        string    `json:"source"`
+	Revision      string    `json:"revision"`
+	ThemeRevision string    `json:"themeRevision,omitempty"`
+	UpdatedAt     time.Time `json:"updatedAt"`
+	Groups        int       `json:"groups"`
+	Links         int       `json:"links"`
+	Subscribers   int       `json:"subscribers"`
+	Uptime        string    `json:"uptime"`
 
 	// Runtime figures, so a small box can be watched without extra tooling.
 	Goroutines int     `json:"goroutines"`
@@ -636,6 +637,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	if ok {
 		state.Source = payload.Meta.Source
 		state.Revision = payload.Meta.Revision
+		state.ThemeRevision = payload.Meta.ThemeRevision
 		state.UpdatedAt = payload.Meta.UpdatedAt
 		state.Groups = payload.Meta.GroupCount
 		state.Links = payload.Meta.LinkCount
