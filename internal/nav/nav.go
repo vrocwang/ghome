@@ -268,6 +268,36 @@ func (c *Config) PageURLs() []string {
 	return out
 }
 
+// IconURLs returns one page URL per host: the URL whose icon will actually be
+// served for that host.
+//
+// /api/icon is queried by host, and a host's icon is resolved once, from the
+// first configured link that uses it. So these are the only URLs worth
+// fetching. Everything that fetches icons must use this rather than PageURLs():
+// warming every link on a host costs a page fetch and an icon fetch per extra
+// link, and none of those results can ever be reached — two links to nas:8080
+// and nas:9090 share a single icon.
+func (c *Config) IconURLs() []string {
+	seen := make(map[string]struct{}, len(c.Groups))
+	out := make([]string, 0, len(c.Groups))
+	for _, raw := range c.PageURLs() {
+		u, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil || u.Host == "" {
+			continue
+		}
+		if u.Scheme != "http" && u.Scheme != "https" {
+			continue
+		}
+		host := strings.ToLower(u.Hostname())
+		if _, dup := seen[host]; dup {
+			continue
+		}
+		seen[host] = struct{}{}
+		out = append(out, raw)
+	}
+	return out
+}
+
 // Parse decodes, fills defaults into, and validates a nav.yaml document.
 //
 // It returns the config, any non-fatal warnings, and an error. Warnings never

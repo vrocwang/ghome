@@ -591,3 +591,36 @@ func containsSubstring(list []string, want string) bool {
 	}
 	return false
 }
+
+// The icon endpoint is queried by host and resolves each host once, from the
+// first link that uses it. Warming more than one URL per host therefore fetches
+// icons that can never be served -- two links to nas:8080 and nas:9090 share a
+// single icon.
+func TestIconURLsKeepsOnePerHost(t *testing.T) {
+	cfg := mustParse(t, `
+groups:
+  - name: g
+    links:
+      - {name: a, url: "http://nas:8080/"}
+      - {name: b, url: "http://nas:9090/deep/path"}
+      - {name: c, url: "https://other.example.com/"}
+      - {name: d, url: "ssh://git@host:2222"}
+      - {name: e, url: "https://OTHER.example.com/x"}
+`)
+
+	got := cfg.IconURLs()
+	want := []string{"http://nas:8080/", "https://other.example.com/"}
+	if len(got) != len(want) {
+		t.Fatalf("IconURLs() = %q, want %q", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("IconURLs()[%d] = %q, want %q", i, got[i], want[i])
+		}
+	}
+
+	// PageURLs must keep reporting everything: it is what the page renders.
+	if n := len(cfg.PageURLs()); n != 5 {
+		t.Errorf("PageURLs() = %d urls, want all 5", n)
+	}
+}

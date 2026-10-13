@@ -12,6 +12,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -906,5 +907,55 @@ func TestHealthzReportsTheSourceBeforeTheFirstLoad(t *testing.T) {
 	}
 	if state.Source != "forgejo:acme/homepage/nav.yaml@main" {
 		t.Errorf("Source = %q, want the configured source", state.Source)
+	}
+}
+
+// The warm prefetch and /api/icon have to agree on which URL represents a host.
+// If they disagree, warm fetches an icon the endpoint never serves and the
+// endpoint fetches one on demand -- a silent performance regression with no
+// error anywhere. Both now derive from Config.IconURLs; this pins that.
+func TestHostIndexAgreesWithIconURLs(t *testing.T) {
+	const doc = `
+groups:
+  - name: g
+    links:
+      - {name: a, url: "http://nas:8080/"}
+      - {name: b, url: "http://nas:9090/deep"}
+      - {name: c, url: "https://other.example.com/"}
+`
+	st := store.New()
+	if err := st.Load([]byte(doc), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	srv, _ := newTestServer(t, Options{Store: st})
+
+	payload, ok := st.Get()
+	if !ok {
+		t.Fatal("store is not loaded")
+	}
+	idx := srv.hostIndex()
+
+	iconURLs := payload.IconURLs()
+	if len(iconURLs) != 2 {
+		t.Fatalf("IconURLs() = %q, want one per host (2)", iconURLs)
+	}
+	if len(idx) != len(iconURLs) {
+		t.Errorf("hostIndex has %d entries, IconURLs has %d; they must cover the same hosts",
+			len(idx), len(iconURLs))
+	}
+	for _, raw := range iconURLs {
+		u, err := url.Parse(raw)
+		if err != nil {
+			t.Fatalf("parse %q: %v", raw, err)
+		}
+		host := strings.ToLower(u.Hostname())
+		if idx[host] != raw {
+			t.Errorf("hostIndex[%q] = %q, but IconURLs picked %q; warm and the endpoint disagree",
+				host, idx[host], raw)
+		}
+	}
+	// The same host reached by a different port must resolve to the first link.
+	if got := idx["nas"]; got != "http://nas:8080/" {
+		t.Errorf("hostIndex[nas] = %q, want the first configured url on that host", got)
 	}
 }

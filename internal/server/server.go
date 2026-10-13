@@ -430,19 +430,15 @@ func (s *Server) hostIndex() map[string]string {
 		return s.idx
 	}
 
+	// Built from IconURLs rather than PageURLs so that this and the warm
+	// prefetch cannot disagree about which URL represents a host.
 	idx := make(map[string]string, 16)
-	for _, raw := range payload.PageURLs() {
+	for _, raw := range payload.IconURLs() {
 		u, err := url.Parse(raw)
 		if err != nil || u.Host == "" {
 			continue
 		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			continue
-		}
-		host := strings.ToLower(u.Hostname())
-		if _, seen := idx[host]; !seen {
-			idx[host] = raw
-		}
+		idx[strings.ToLower(u.Hostname())] = raw
 	}
 	s.idx, s.idxRev = idx, payload.Meta.Revision
 	return idx

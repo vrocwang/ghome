@@ -108,8 +108,11 @@ func run() error {
 	// there is no way for the icon allow-list or the probe targets to drift away
 	// from the config that is actually being served.
 	applyConfig := func(cfg *nav.Config) {
-		iconCache.Allow(cfg.PageURLs())
-		iconCache.Warm(ctx, cfg.PageURLs())
+		// IconURLs, not PageURLs: one URL per host is what the icon endpoint can
+		// ever serve, so warming more than that fetches icons nobody can reach.
+		iconURLs := cfg.IconURLs()
+		iconCache.Allow(iconURLs)
+		iconCache.Warm(ctx, iconURLs)
 		probes.apply(cfg)
 	}
 
