@@ -48,9 +48,15 @@ type Watcher struct {
 	OnUpdate func(*nav.Config)
 }
 
-// New builds a watcher. interval is clamped to at least one second.
+// New builds a watcher.
+//
+// A positive interval below a second is rounded up: asking for a faster cadence
+// than that is never intended. Zero or negative means no polling at all, which
+// is a real mode -- refresh on webhook or manual request only -- rather than a
+// very fast one. It used to be clamped up to one second along with everything
+// else, so "--poll=0" quietly meant "poll every second".
 func New(src source.Source, st *store.Store, interval time.Duration, log *slog.Logger) *Watcher {
-	if interval < time.Second {
+	if interval > 0 && interval < time.Second {
 		interval = time.Second
 	}
 	if log == nil {
@@ -65,6 +71,10 @@ func New(src source.Source, st *store.Store, interval time.Duration, log *slog.L
 	}
 }
 
+// polling reports whether Run should also re-check on a timer. When false the
+// only ways to refresh are Kick and the initial fetch at startup.
+func (w *Watcher) polling() bool { return w.interval > 0 }
+
 // Kick requests an immediate refresh from outside the polling loop (a webhook,
 // or the manual refresh endpoint). It never blocks.
 func (w *Watcher) Kick() {
@@ -75,6 +85,10 @@ func (w *Watcher) Kick() {
 }
 
 // Run refreshes until ctx is cancelled. It blocks.
+//
+// It always refreshes once before waiting, so a webhook-only watcher still has
+// the current config at startup and a webhook that never arrives does not leave
+// the page empty.
 func (w *Watcher) Run(ctx context.Context) {
 	var backoff time.Duration
 
@@ -85,27 +99,53 @@ func (w *Watcher) Run(ctx context.Context) {
 			return
 		}
 
-		var wait time.Duration
-		if err != nil {
+		var (
+			wait    time.Duration
+			onTimer bool
+		)
+		switch {
+		case err != nil && w.polling():
 			backoff = w.nextBackoff(backoff)
-			wait = backoff
+			wait, onTimer = backoff, true
 			w.log.Warn("refresh failed, keeping the last good config",
 				"error", err, "retry_in", wait.Round(time.Second))
-		} else {
+		case err != nil:
+			// Polling is off, so there is no timer to retry on. Saying so
+			// matters: the failure would otherwise look like a hang.
+			w.log.Warn("refresh failed, keeping the last good config; "+
+				"polling is off, so this waits for the next push", "error", err)
+		case w.polling():
 			backoff = 0
-			wait = w.interval - time.Since(start)
-			if wait < 0 {
-				wait = 0
-			}
+			wait, onTimer = max(w.interval-time.Since(start), 0), true
+		default:
+			backoff = 0 // polling is off: wait for a kick instead
 		}
 
-		kicked, ok := w.sleep(ctx, wait)
-		if !ok {
+		var kicked bool
+		if onTimer {
+			var ok bool
+			if kicked, ok = w.sleep(ctx, wait); !ok {
+				return
+			}
+		} else if !w.waitForKick(ctx) {
 			return
+		} else {
+			kicked = true
 		}
 		if kicked {
 			w.coalesce(ctx)
 		}
+	}
+}
+
+// waitForKick blocks until something asks for a refresh, or ctx is done. It is
+// what the loop does in place of sleeping when polling is switched off.
+func (w *Watcher) waitForKick(ctx context.Context) bool {
+	select {
+	case <-ctx.Done():
+		return false
+	case <-w.kick:
+		return true
 	}
 }
 

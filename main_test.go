@@ -421,3 +421,47 @@ func TestEnvExampleMatchesTheConfigurationSurface(t *testing.T) {
 		}
 	}
 }
+
+// The README's flag table is what an operator actually reads, and it had drifted
+// down to 9 of 21 flags while the rest survived only in prose. Prose is not a
+// reference: "where do I set this" was a real question asked of this project,
+// and the answer was missing from the table.
+func TestReadmeDocumentsEveryFlag(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+
+	declared := map[string]bool{}
+	for _, m := range regexp.MustCompile(`fs\.(?:StringVar|BoolVar|DurationVar)\(&\w+\.\w+,\s*"([^"]+)"`).
+		FindAllStringSubmatch(string(src), -1) {
+		declared[m[1]] = true
+	}
+	if len(declared) < 15 {
+		t.Fatalf("found only %d flags in main.go; the pattern is wrong", len(declared))
+	}
+
+	// A table row, not a mention: prose already mentioned most of them.
+	documented := map[string]bool{}
+	for _, m := range regexp.MustCompile("(?m)^\\| `--([a-z-]+)` \\|").FindAllStringSubmatch(string(readme), -1) {
+		documented[m[1]] = true
+	}
+	if len(documented) < 15 {
+		t.Fatalf("found only %d rows in the README flag table; the pattern is wrong", len(documented))
+	}
+
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
+		if !documented[name] {
+			t.Errorf("README.md has no flag table row for --%s", name)
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(documented)) {
+		if !declared[name] {
+			t.Errorf("README.md documents --%s, which the program does not define", name)
+		}
+	}
+}

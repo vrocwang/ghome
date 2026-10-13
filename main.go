@@ -171,13 +171,22 @@ func run() error {
 		"url", displayURL(listener.Addr().String(), o.basePath),
 		"version", version,
 		"source", src.Describe(),
-		"poll", o.poll.Round(time.Second).String(),
+		"poll", pollLabel(o.poll),
 		"webhook", enabledLabel(o.webhookSecret != ""),
 		"manual_refresh", enabledLabel(o.adminToken != ""),
 		"web_dir", orDefault(o.webDir, "embedded"),
 		"icon_dir", orDefault(o.iconDir, "none"),
 	)
-	if o.webhookSecret == "" && isForge(o.sourceKind) {
+	switch {
+	case o.poll <= 0 && o.webhookSecret == "" && o.adminToken == "":
+		// Every way of asking for a refresh is switched off, so the page is a
+		// snapshot: it loads once and never changes again. That is nearly always
+		// a mistake rather than an intent, so say it plainly.
+		log.Warn("polling is off and neither --webhook-secret nor --admin-token is set: " +
+			"the config loads once and can never update")
+	case o.poll <= 0:
+		log.Info("polling is off: updates come from the webhook and manual refresh only")
+	case o.webhookSecret == "" && isForge(o.sourceKind):
 		log.Warn("no --webhook-secret set: updates rely on polling alone. " +
 			"See the README to wire up a webhook for instant updates.")
 	}
@@ -334,7 +343,8 @@ func parseFlags() options {
 	fs.StringVar(&o.forgeToken, "forge-token", env("GHOME_FORGE_TOKEN", ""),
 		"access token with read scope, needed for a private repository")
 	fs.DurationVar(&o.poll, "poll", envDuration("GHOME_POLL", 60*time.Second),
-		"how often to re-check the config (the safety net behind webhooks)")
+		"how often to re-check the config (the safety net behind webhooks); "+
+			"0 disables polling, leaving webhook and manual refresh")
 	fs.StringVar(&o.webhookSecret, "webhook-secret", env("GHOME_WEBHOOK_SECRET", ""),
 		"HMAC secret for POST /api/webhook; empty disables the endpoint")
 	fs.StringVar(&o.branch, "branch", env("GHOME_BRANCH", ""),
@@ -382,8 +392,10 @@ Examples:
   # To change the markup or the base stylesheet instead, start from a copy:
   ghome --dump-web=/srv/ghome/web   # then edit and pass --web-dir
 
-Every flag can also be set through the matching GHOME_* environment variable,
-which keeps tokens out of the process list.
+Every setting can also be given through the matching GHOME_* environment
+variable, which keeps tokens out of the process list. The three actions above
+(--dump-web, --healthcheck, --version) have no variable: they run and exit
+rather than configure a running server.
 `)
 	}
 	// ExitOnError already handles the error; parsing cannot fail here.
@@ -514,6 +526,15 @@ func runHealthcheck(o options) error {
 			target, res.StatusCode, bytes.TrimSpace(body))
 	}
 	return nil
+}
+
+// pollLabel describes the re-check cadence, including the fact that it can be
+// switched off. A bare "0s" in the startup line reads like a misconfiguration.
+func pollLabel(d time.Duration) string {
+	if d <= 0 {
+		return "off"
+	}
+	return d.Round(time.Second).String()
 }
 
 // isForge reports whether the source kind reads through the Gitea/Forgejo API.

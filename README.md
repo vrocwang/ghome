@@ -728,14 +728,26 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | flag | 环境变量 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `--listen` | `GHOME_LISTEN` | `:8080` | 监听地址。建议 `127.0.0.1:8080` 交给 nginx |
-| `--source` | `GHOME_SOURCE` | `file` | `file` / `gitea` / `forgejo`（后两者同一套代码） |
+| `--base-path` | `GHOME_BASE_PATH` | | 挂在子路径下，例如 `/nav`。webhook 地址也跟着变 |
+| `--log-level` | `GHOME_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
+| `--source` | `GHOME_SOURCE` | `file` | `file` / `gitea` / `forgejo`（后两者同一套代码，只是标签不同） |
 | `--file` | `GHOME_FILE` | `nav.yaml` | `file` 模式下的路径 |
 | `--forge-url` | `GHOME_FORGE_URL` | | forge 根地址（Gitea / Forgejo），支持反代子路径 |
 | `--forge-owner` | `GHOME_FORGE_OWNER` | | 用户名或组织 |
 | `--forge-repo` | `GHOME_FORGE_REPO` | | 仓库名 |
 | `--forge-ref` | `GHOME_FORGE_REF` | `main` | 分支、tag 或 commit SHA |
 | `--forge-path` | `GHOME_FORGE_PATH` | `nav.yaml` | 仓内路径 |
-| `--forge-token` | `GHOME_FORGE_TOKEN` | | 只读 token（私有仓必填） |
+| `--forge-token` | `GHOME_FORGE_TOKEN` | | 只读 token（私有仓必填），以 `Authorization: Bearer` 发送 |
+| `--poll` | `GHOME_POLL` | `60s` | 兜底轮询间隔。**`0` 关闭轮询**，只靠 webhook 和手动刷新 |
+| `--webhook-secret` | `GHOME_WEBHOOK_SECRET` | | `POST /api/webhook` 的 HMAC 密钥；留空则关闭该接口 |
+| `--branch` | `GHOME_BRANCH` | | 只对这个分支的推送重载；默认取 `--forge-ref` |
+| `--admin-token` | `GHOME_ADMIN_TOKEN` | | `POST /api/refresh` 的令牌；留空则关闭该接口 |
+| `--cache-file` | `GHOME_CACHE_FILE` | | 持久化最后一份可用配置，重启时 forge 不可达也能服务 |
+| `--web-dir` | `GHOME_WEB_DIR` | | 从目录提供 UI，逐文件回退到内嵌副本 |
+| `--icon-dir` | `GHOME_ICON_DIR` | | 本地图标目录，优先于联网抓取 |
+| `--dump-web` | | | 把内嵌前端导出到目录后退出（`--web-dir` 的起点） |
+| `--healthcheck` | | | 请求自己的 `/healthz`，200 退出 0；给容器健康检查用 |
+| `--version` | | | 打印版本后退出 |
 
 `--forge-ref` 写完整 commit SHA 时，webhook 的分支过滤会自动关闭（否则推任何分支都匹配不上，通知会被全部忽略）。
 

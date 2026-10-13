@@ -231,10 +231,82 @@ func TestRefreshRecoversFromAFailure(t *testing.T) {
 }
 
 func TestNewClampsATinyInterval(t *testing.T) {
-	w := New(&fakeSource{}, store.New(), 0, discardLogger())
-	if w.interval < time.Second {
-		t.Errorf("interval = %v, want at least 1s", w.interval)
+	// A small positive interval is rounded up; asking for faster than a second
+	// is never intended.
+	w := New(&fakeSource{}, store.New(), 250*time.Millisecond, discardLogger())
+	if w.interval != time.Second {
+		t.Errorf("interval = %v, want 1s", w.interval)
 	}
+	if !w.polling() {
+		t.Error("polling() = false for a positive interval")
+	}
+}
+
+// Zero used to be clamped up to one second along with everything else, so
+// "--poll=0" quietly polled once a second -- the opposite of switching polling
+// off, and the worst possible reading of what the operator asked for.
+func TestNewTreatsZeroAndNegativeAsPollingOff(t *testing.T) {
+	for _, interval := range []time.Duration{0, -time.Second} {
+		w := New(&fakeSource{}, store.New(), interval, discardLogger())
+		if w.polling() {
+			t.Errorf("interval %v: polling() = true, want false", interval)
+		}
+	}
+}
+
+// With polling off, startup still loads once and then nothing happens on a
+// timer. The 2.5s wait is well past the one second zero used to become, so a
+// surviving timer would show up as several extra calls.
+func TestPollingOffRefreshesOnceThenWaitsForAKick(t *testing.T) {
+	src := &fakeSource{data: []byte(docA), rev: "rev-a"}
+	st := store.New()
+	w := New(src, st, 0, discardLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx) }()
+
+	waitFor(t, 3*time.Second, "the first load", func() bool { return st.Loaded() })
+
+	time.Sleep(2500 * time.Millisecond)
+	if got := src.count(); got != 1 {
+		t.Errorf("Fetch called %d times in 2.5s with polling off, want 1", got)
+	}
+
+	src.set(docB, "rev-b")
+	w.Kick()
+	waitFor(t, 5*time.Second, "the kick driven reload", func() bool {
+		return revision(t, st) == "rev-b"
+	})
+	if got := src.count(); got != 2 {
+		t.Errorf("Fetch called %d times after one kick, want 2", got)
+	}
+
+	cancel()
+	select {
+	case <-done:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Run() did not return after the context was cancelled")
+	}
+}
+
+// A failure with polling off must wait for a kick rather than retrying. A tight
+// loop here would hit the forge far harder than any poll interval ever would,
+// which would make the "off" switch the most expensive setting available.
+func TestPollingOffDoesNotRetryInALoopWhenFailing(t *testing.T) {
+	src := &fakeSource{err: errors.New("forge is down")}
+	w := New(src, store.New(), 0, discardLogger())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go w.Run(ctx)
+
+	time.Sleep(1500 * time.Millisecond)
+	if got := src.count(); got != 1 {
+		t.Errorf("Fetch called %d times in 1.5s while failing with polling off, want 1", got)
+	}
+	cancel()
 }
 
 func TestBackoffNeverExceedsThePollInterval(t *testing.T) {
