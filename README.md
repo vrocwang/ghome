@@ -202,7 +202,29 @@ Gitea 仓库页 → **设置 → 网页钩子 → 添加网页钩子 → 选 Git
 保存时 Gitea 会立刻发一个 ping，ghome 回 `pong`——在"最近投递"里看到 **200** 就说明通了。
 
 > **密钥必须填。** 没配 `--webhook-secret` 时 `/api/webhook` 直接返回 403 不工作，而不是无鉴权地裸奔。
-> 请求用 HMAC-SHA256 签名（`X-Gitea-Signature`），同时兼容 GitHub 风格的 `X-Hub-Signature-256` / `X-Hub-Signature`。
+
+签名校验接受这几个头中的**任意一个**匹配即可（都是对原始请求体做 HMAC）：
+
+| 头 | 谁发 |
+| --- | --- |
+| `X-Gitea-Signature` | Gitea；较老的 Forgejo 也只发这个 |
+| `X-Forgejo-Signature` | Forgejo（官方文档里用的就是这个） |
+| `X-Hub-Signature-256` | GitHub 风格，`sha256=` 前缀 |
+| `X-Hub-Signature` | GitHub 风格，`sha1=` 前缀 |
+
+事件头同理，`X-Forgejo-Event` / `X-Gitea-Event` / `X-GitHub-Event` 依次识别。
+
+### Forgejo
+
+Forgejo 是 Gitea 的 fork，**配置方式完全一样**：
+
+- 仓库页 → **设置 → Webhooks（网页钩子）→ 添加 Webhook → 类型选 `Forgejo`**
+- 目标 URL、HTTP 方法 `POST`、内容类型 `application/json`、密钥与 `--webhook-secret` 一致、触发条件勾推送事件
+
+两点差别：
+
+1. **签名头**：Forgejo 较老版本只发 `X-Gitea-Signature`（源码 `services/webhook/deliver.go` 里就是这个名字），官方文档展示的是 `X-Forgejo-Signature`。两个都认，不用你操心。
+2. **flag 名字仍叫 `--gitea-*`**：`--gitea-url`/`--gitea-owner`/`--gitea-repo` 对 Forgejo 一样用，API 路径也兼容。`--source` 写 `forgejo` 或 `gitea` 都行，两者走同一套代码。
 
 ### 4. 验证
 
@@ -477,7 +499,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | flag | 环境变量 | 默认 | 说明 |
 | --- | --- | --- | --- |
 | `--listen` | `GHOME_LISTEN` | `:8080` | 监听地址。建议 `127.0.0.1:8080` 交给 nginx |
-| `--source` | `GHOME_SOURCE` | `file` | `file` 或 `gitea` |
+| `--source` | `GHOME_SOURCE` | `file` | `file` / `gitea` / `forgejo`（后两者同一套代码） |
 | `--file` | `GHOME_FILE` | `nav.yaml` | `file` 模式下的路径 |
 | `--gitea-url` | `GHOME_GITEA_URL` | | Gitea 根地址，支持反代子路径 |
 | `--gitea-owner` | `GHOME_GITEA_OWNER` | | 用户名或组织 |

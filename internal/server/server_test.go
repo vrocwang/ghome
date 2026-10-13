@@ -795,3 +795,93 @@ func TestWebDirMixesOverriddenAndEmbeddedFiles(t *testing.T) {
 			rec.Code, rec.Body.Len())
 	}
 }
+
+/* ---------- Forgejo ---------- */
+
+// Forgejo is a Gitea fork. Older releases sign only with the Gitea-named
+// header, its documentation shows the Forgejo-named one, and newer releases
+// appear to send both -- so both have to be accepted rather than betting on one.
+func TestWebhookAcceptsForgejoHeaders(t *testing.T) {
+	cases := []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{
+			name: "forgejo signature only",
+			headers: map[string]string{
+				"X-Forgejo-Event":     "push",
+				"X-Forgejo-Signature": sign(t, pushMain, "s3cret"),
+			},
+			want: http.StatusAccepted,
+		},
+		{
+			name: "gitea signature only (older forgejo)",
+			headers: map[string]string{
+				"X-Gitea-Event":     "push",
+				"X-Gitea-Signature": sign(t, pushMain, "s3cret"),
+			},
+			want: http.StatusAccepted,
+		},
+		{
+			name: "both families, as newer releases send them",
+			headers: map[string]string{
+				"X-Forgejo-Event":     "push",
+				"X-Forgejo-Signature": sign(t, pushMain, "s3cret"),
+				"X-Gitea-Event":       "push",
+				"X-Gitea-Signature":   sign(t, pushMain, "s3cret"),
+			},
+			want: http.StatusAccepted,
+		},
+		{
+			name: "a stray bogus header does not veto a valid one",
+			headers: map[string]string{
+				"X-Forgejo-Event":     "push",
+				"X-Forgejo-Signature": sign(t, pushMain, "s3cret"),
+				"X-Gitea-Signature":   strings.Repeat("0", 64),
+			},
+			want: http.StatusAccepted,
+		},
+		{
+			name: "forgejo signature that does not verify",
+			headers: map[string]string{
+				"X-Forgejo-Event":     "push",
+				"X-Forgejo-Signature": strings.Repeat("a", 64),
+			},
+			want: http.StatusUnauthorized,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+			rec := postWebhook(t, srv, pushMain, tc.headers)
+			if rec.Code != tc.want {
+				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body)
+			}
+			if tc.want == http.StatusAccepted && counter.n != 1 {
+				t.Errorf("trigger ran %d times, want 1", counter.n)
+			}
+			if tc.want == http.StatusUnauthorized && counter.n != 0 {
+				t.Errorf("trigger ran %d times, want 0", counter.n)
+			}
+		})
+	}
+}
+
+// A Forgejo ping must not be mistaken for a push.
+func TestWebhookHandlesForgejoPing(t *testing.T) {
+	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+
+	body := `{"zen":"Non-blocking is better than blocking."}`
+	rec := postWebhook(t, srv, body, map[string]string{
+		"X-Forgejo-Event":     "ping",
+		"X-Forgejo-Signature": sign(t, body, "s3cret"),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body)
+	}
+	if counter.n != 0 {
+		t.Errorf("a ping must not trigger a reload, ran %d times", counter.n)
+	}
+}

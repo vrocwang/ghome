@@ -50,7 +50,12 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	event := r.Header.Get("X-Gitea-Event")
+	// Gitea sends X-Gitea-Event; Forgejo sends X-Forgejo-Event alongside it, and
+	// older Forgejo releases send only the Gitea-named one.
+	event := r.Header.Get("X-Forgejo-Event")
+	if event == "" {
+		event = r.Header.Get("X-Gitea-Event")
+	}
 	if event == "" {
 		event = r.Header.Get("X-GitHub-Event")
 	}
@@ -92,18 +97,40 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": "reload requested"})
 }
 
-// validWebhookSignature accepts the signature headers Gitea sends, plus the
-// GitHub compatible ones, so the same endpoint also works against a Gitea
-// instance configured with either format.
+// signatureHeaders are the signature headers accepted, in no particular order
+// of preference: any one of them matching is enough.
+//
+// Forgejo is a Gitea fork and older releases sign only with the Gitea-named
+// header, while its documentation shows the Forgejo-named one; newer releases
+// appear to send both. Rather than depend on which, accept either. Gitea,
+// Forgejo and Gogs all sign the raw body with HMAC-SHA256, so the values are
+// interchangeable when present. The GitHub-style pair is accepted so the same
+// endpoint works for a Gitea or Forgejo instance configured that way.
+var signatureHeaders = []struct {
+	header string
+	prefix string
+	hash   func() hash.Hash
+}{
+	{"X-Forgejo-Signature", "", sha256.New},
+	{"X-Gitea-Signature", "", sha256.New},
+	{"X-Hub-Signature-256", "sha256=", sha256.New},
+	{"X-Hub-Signature", "sha1=", sha1.New},
+}
+
+// validWebhookSignature reports whether any supplied signature matches.
+//
+// Every candidate is compared in constant time. A present-but-wrong header is
+// not fatal on its own: if a proxy injects a stray header, a correct one
+// alongside it still counts.
 func validWebhookSignature(h http.Header, body []byte, secret string) bool {
-	if sig := h.Get("X-Gitea-Signature"); sig != "" {
-		return hmacMatches(sig, body, secret, sha256.New, "")
-	}
-	if sig := h.Get("X-Hub-Signature-256"); sig != "" {
-		return hmacMatches(sig, body, secret, sha256.New, "sha256=")
-	}
-	if sig := h.Get("X-Hub-Signature"); sig != "" {
-		return hmacMatches(sig, body, secret, sha1.New, "sha1=")
+	for _, candidate := range signatureHeaders {
+		sig := h.Get(candidate.header)
+		if sig == "" {
+			continue
+		}
+		if hmacMatches(sig, body, secret, candidate.hash, candidate.prefix) {
+			return true
+		}
 	}
 	return false
 }

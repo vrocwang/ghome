@@ -310,7 +310,7 @@ func parseFlags() options {
 	fs.StringVar(&o.listen, "listen", env("GHOME_LISTEN", ":8080"),
 		"address to serve on")
 	fs.StringVar(&o.sourceKind, "source", env("GHOME_SOURCE", "file"),
-		"where nav.yaml lives: file or gitea")
+		"where nav.yaml lives: file, gitea or forgejo")
 	fs.StringVar(&o.file, "file", env("GHOME_FILE", "nav.yaml"),
 		"path to nav.yaml when --source=file")
 	fs.StringVar(&o.giteaURL, "gitea-url", env("GHOME_GITEA_URL", ""),
@@ -417,7 +417,7 @@ func buildSource(o options) (source.Source, error) {
 			Token:   o.giteaToken,
 		})
 	default:
-		return nil, fmt.Errorf("unknown --source %q: expected file or gitea", o.sourceKind)
+		return nil, fmt.Errorf("unknown --source %q: expected file, gitea or forgejo", o.sourceKind)
 	}
 }
 
