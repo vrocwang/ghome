@@ -323,13 +323,16 @@ git commit -am "改个标题" && git push
    避免对一个挂掉的站点反复重试）。两个上限都要满足：只限条数的话，512 × 512KB
    最坏是 256 MB。
 
-这样解决的几件事：用 Vite/Next 打包的站点图标是 `/assets/icon-a1b2c3.svg` 这种哈希名，根目录必然 404；内网服务大多根本没有 favicon；解析不到时前端回退到字母头像。同时浏览器**一次都不用访问外网**，CSP 里的 `img-src` 已经收紧到 `'self' data:`。
+这样解决的几件事：用 Vite/Next 打包的站点图标是 `/assets/icon-a1b2c3.svg` 这种哈希名，根目录必然 404；内网服务大多根本没有 favicon；解析不到时前端回退到字母头像。同时浏览器**一次都不用访问外网**（favicon 走的是这个代理，不是第三方）。CSP 的 `img-src` 是 `'self' data: http: https:`——后面两个是给配置里显式写的
+`icon:` 图片 URL 留的，见下。
 
 > **图标按 host 缓存**，所以同一台机器上不同端口的服务（`nas:8080` 和 `nas:9090`）会共用同一个图标。这种情况用链接自己的 `icon:` 字段显式指定。
 
 > **安全边界**：`/api/icon` 只服务当前配置里出现过的 host，不是一个开放代理。响应另外带 `Content-Security-Policy: default-src 'none'; sandbox`——因为第三方 SVG 从我们自己的 domain 发出去，如果不加这个，直接打开图标 URL 就能执行脚本。
 >
-> 一个已知的残留面：被允许的页面可以在自己的 HTML 里写 `<link rel="icon" href="http://169.254.169.254/...">`，让服务端去取。实际影响有限（响应必须是合法图片才会被返回），而且配置仓本身就是这个系统的信任边界——能改 `nav.yaml` 的人本来就能让浏览器去访问任意地址。如果你要把配置仓开放给不完全可信的人，这一条需要额外处理。
+> 允许列表管的是**每一跳**，不只是第一个 URL：页面 HTML 里声明的图标如果指向
+> 别的 host，会被拒绝；302 跳到别的 host 也会被拒绝。代价是**放在 CDN 上的图标不会
+> 被抓取**——这种情况用 `--icon-dir` 放一个本地文件。
 
 ---
 
@@ -811,7 +814,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `GET` | `/api/nav` | 当前配置 + 版本元信息；尚未加载到配置时返回 503 |
 | `GET` | `/api/status` | 探测结果；未开启探测时返回 `{"enabled":false}` 而不是错误 |
 | `GET` | `/api/icon?h=<host>` | 图标代理。仅限配置里出现过的 host，响应带沙箱 CSP |
-| `GET` | `/api/events` | SSE 流。连上先发 `hello`（带当前 revision），之后每次变更发 `changed` |
+| `GET` | `/api/events` | SSE 流。连上先发 `hello`（带当前 revision），之后每次变更发 `changed`。并发上限 256，超出返回 503（一个标签页一条，正常远够；`/healthz` 的 `subscribers` 是当前数） |
 | `POST` | `/api/webhook` | Gitea 推送回调，HMAC 校验 |
 | `POST` | `/api/refresh` | 手动触发重载，需要 `Authorization: Bearer <admin-token>` |
 | `GET` | `/healthz` | 健康检查，见下 |
@@ -854,12 +857,12 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `gitea 401` | token 过期/被撤销 | 重新生成 token |
 | `gitea 403` | token 没有这个仓的读权限 | 生成时勾 `repository: read` |
 | `forge 404` 但文件明明在 | `--forge-ref` 或 `--forge-path` 不对 | 注意大小写；`--forge-path` 是仓内相对路径 |
-| push 了但页面要等一分钟 | webhook 没通，走的轮询 | Gitea 网页钩子的"最近投递"看有没有 200 |
+| push 了但页面要等一分钟 | webhook 没通，走的轮询 | 看网页钩子的"最近投递"：成功是 **202**，403 多半是被反代的 IP 白名单挡了 |
 | webhook 报 401 | 密钥两边不一致 | 仓库设置里的密钥和 `--webhook-secret` 必须逐字符相同 |
 | 以为自己在跑 Gitea，其实是 Forgejo | `/api/v1/version` 报的 `16.0.5+gitea-1.22.0` 里，`+gitea-` 后是**兼容的 Gitea API 版本** | `curl 你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo |
 | webhook 报 202 但没更新 | 推的不是被监听的分支 | 看响应体里的 `"status":"ignored"` 和 reason |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或 `/healthz` 的 `warnings` |
-| 改了颜色但页面没变 | 浏览器缓存了 `theme.css` | 页面会在配置版本变化时自动带新版本号重拉；硬刷一次也能解决 |
+| 改了颜色但页面没变 | 多半是 ghome 还没察觉这次推送（webhook/轮询），其次才轮到浏览器缓存 | 先看 `/healthz` 的 `warnings`（颜色词拼错会被丢弃并警告），再确认推送到了；`/theme.css` 末端会写明 custom.css 的版本哈希 |
 | 想改样式又不想装 Go | 不需要装 | 用 `style:` 令牌或 `custom.css`；要动结构才用 `--dump-web` + `--web-dir` |
 | 图标都是字母头像 | 该站点没有可解析的图标，或服务端取不到 | 用 `icon:` 显式指定，或把图标放进 `--icon-dir` |
 | 放了本地图标却不生效 | 文件名不对（必须是 `<host>` 加扩展名，host 不含端口），或路径拼错 | 启动日志会报 `local icon directory ready, icons=N`；`N=0` 或出现 `--icon-dir is unusable` 就说明没生效 |
