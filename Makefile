@@ -58,11 +58,17 @@ cross:
 	CGO_ENABLED=0 GOOS=darwin  GOARCH=amd64 $(BUILD) -o dist/$(BINARY)-darwin-amd64 .
 	@ls -lh dist
 
-# .git is excluded from the Docker build context on purpose (so a commit does not
-# bust the COPY layer cache), which means BuildKit cannot read the version and
-# warns about it. Pass it in instead of letting ghome report "dev".
+# VERSION and VCS_REF are passed in rather than inferred, so the image reports the
+# real version instead of "dev".
+#
+# BUILDX_GIT_INFO=false stops buildx from doing its own git lookup for the same
+# information. It warns "current commit information was not captured by the
+# build" whenever .git is present in the context directory but git refuses to
+# treat it as a work tree, which is a git problem rather than a Docker one (a
+# common cause is git's "dubious ownership" check). Since the values are already
+# supplied as build args, that lookup adds nothing here.
 docker:
-	docker build \
+	BUILDX_GIT_INFO=false docker build \
 	  --build-arg VERSION=$(VERSION) \
 	  --build-arg VCS_REF=$(VCS_REF) \
 	  -t ghome .

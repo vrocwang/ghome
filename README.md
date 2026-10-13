@@ -522,25 +522,57 @@ docker exec ghome /ghome --healthcheck       # 容器里查自己
 `65534`，宿主目录得给它读权限。
 
 **关于 `WARNING: current commit information was not captured by the build`。**
-这条警告是无害的——构建会成功——但它值得解释，因为它指向一个真问题。
 
-BuildKit 想读 `.git` 把 commit 塞进镜像的 OCI 元数据，而本项目的 `.dockerignore`
-**故意排除了 `.git`**：它每次提交都变，留着会让 `COPY . .` 的层缓存每次都失效。
+这条警告无害——构建会成功——但我第一版把它归因于「`.dockerignore` 排除了
+`.git`」，**那是错的**。看 buildx 源码 `build/git.go`：
 
-正确的应对不是把 `.git` 放回去（那是拿真实的构建缓存去换没人读的元数据），
-而是把版本号**显式传进去**：
-
-```bash
-docker build \
-  --build-arg VERSION="$(git describe --tags --always --dirty)" \
-  --build-arg VCS_REF="$(git rev-parse --short HEAD)" \
-  -t ghome .
+```go
+if !gitc.IsInsideWorkTree(ctx) {
+    if st, err := os.Stat(path.Join(wd, ".git")); err == nil && st.IsDir() {
+        return nil, errors.New("failed to read current commit information with git rev-parse --is-inside-work-tree")
+    }
+    return nil, nil      // 没有 .git 就静默跳过，不报警
+}
 ```
 
-`make docker` 就是这条命令。这比 BuildKit 的自动推断更有用，因为 ghome 会
-**显示**它——`ghome --version` 和 `/healthz` 的 `version` 字段——而不是躺在
-镜像标签里没人看。不传的话镜像里报的是 `dev`；本地 `make build` 报的是
-commit，两者会对不上。
+`wd` 是**宿主上你传给 `docker build` 的那个上下文目录**，`os.Stat` 跑在宿主上。
+`.dockerignore` 只影响送进 builder 的内容，影响不到这个判断。
+
+所以触发条件是：**`.git` 在，但 git 在那个目录里拒绝把它认作工作树**。
+这是个 git 问题，不是 Docker 问题。复现它就能拿到真实原因：
+
+```bash
+cd <你传给 docker build 的那个上下文目录>
+git rev-parse --is-inside-work-tree
+git status        # 上一条失败时，这条会说清为什么
+```
+
+最常见的是 Git 的 "dubious ownership"（仓库属主与执行构建的用户不一致，
+比如仓库是 root 克隆的，或工作目录是挂载进来的）：
+
+```
+fatal: detected dubious ownership in repository at '...'
+```
+
+对应修法：
+
+```bash
+git config --global --add safe.directory <那个目录>
+```
+
+**如果不想管 git 那边**，也可以让 buildx 直接跳过这一步：
+
+```bash
+BUILDX_GIT_INFO=false docker build ...
+```
+
+（它默认是 `true`；设成 `false` 后 `getGitAttributes` 会在开头提前返回，压根
+不调 git。`make docker` 已经这么设了——版本号和 revision 我们是显式传进去的，
+buildx 那套自动推断对这个项目本来就是多余的。）
+
+顺带说一下版本号：Dockerfile 用 `--build-arg VERSION` 显式注入 `-ldflags
+"-X main.version=..."`，所以镜像里 `ghome --version` 和 `/healthz` 的 `version`
+字段报的是真实版本，不是 `dev`。不传的话就是 `dev`。
 
 **多架构。** Dockerfile 用 `--platform=$BUILDPLATFORM` 让编译器保持宿主架构，
 所以交叉编译而不是模拟：

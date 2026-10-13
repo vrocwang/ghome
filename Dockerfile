@@ -9,11 +9,9 @@
 # Declared before the first FROM so both stages see them.
 #
 # VERSION is what ghome reports from --version and in /healthz. It is passed in
-# rather than read from .git on purpose: .git is excluded from the context so
-# that a commit does not invalidate the COPY layer, which means BuildKit cannot
-# infer it and warns that "current commit information was not captured". Passing
-# it explicitly is quieter *and* more useful, because ghome actually prints it
-# instead of leaving it in image metadata nobody reads.
+# explicitly rather than inferred, so the image is correct no matter what the
+# builder can or cannot read out of .git -- and unlike buildx's automatic git
+# info, ghome actually prints this one.
 #
 #   docker build --build-arg VERSION=$(git describe --tags --always --dirty) .
 #
