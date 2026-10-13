@@ -1,7 +1,12 @@
 package icons
 
 import (
+	"context"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -57,5 +62,69 @@ func TestCacheSurvivesAnEntryLargerThanTheBudget(t *testing.T) {
 	r.put("miss", Icon{}, false, time.Hour)
 	if _, _, fresh := r.get("miss"); !fresh {
 		t.Error("a cached miss was not retained")
+	}
+}
+
+// The per-call worker cap does not bound the total on its own: every config
+// reload starts its own pool, so the number of simultaneous upstream requests
+// climbs with the number of reloads. A shared semaphore is what actually bounds
+// it.
+func TestWarmFetchesAreBoundedAcrossCalls(t *testing.T) {
+	var mu sync.Mutex
+	live, peak := 0, 0
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		live++
+		if live > peak {
+			peak = live
+		}
+		mu.Unlock()
+
+		time.Sleep(30 * time.Millisecond) // hold the slot so overlap is observable
+		mu.Lock()
+		live--
+		mu.Unlock()
+		if strings.HasSuffix(r.URL.Path, "/favicon.ico") {
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(pngBytes)
+			return
+		}
+		_, _ = w.Write([]byte("<html></html>"))
+	}))
+	defer upstream.Close()
+
+	r := testResolver(t, Options{})
+	host := strings.TrimPrefix(upstream.URL, "http://")
+
+	// Ten overlapping Warm calls, each with its own uncached url.
+	for call := 0; call < 10; call++ {
+		urls := make([]string, 0, 8)
+		for i := 0; i < 8; i++ {
+			urls = append(urls, fmt.Sprintf("http://%s/c%d-%d", host, call, i))
+		}
+		r.Allow(urls)
+		r.Warm(context.Background(), urls)
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		done := live == 0 && peak > 0
+		mu.Unlock()
+		if done {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	mu.Lock()
+	got := peak
+	mu.Unlock()
+	if got > warmWorkers {
+		t.Errorf("peak concurrent upstream requests = %d, want at most warmWorkers (%d)", got, warmWorkers)
+	}
+	if got == 0 {
+		t.Error("no upstream request was made; the test proves nothing")
 	}
 }
