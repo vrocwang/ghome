@@ -56,9 +56,7 @@ type Watcher struct {
 // very fast one. It used to be clamped up to one second along with everything
 // else, so "--poll=0" quietly meant "poll every second".
 func New(src source.Source, st *store.Store, interval time.Duration, log *slog.Logger) *Watcher {
-	if interval > 0 && interval < time.Second {
-		interval = time.Second
-	}
+	interval = EffectiveInterval(interval)
 	if log == nil {
 		log = slog.Default()
 	}
@@ -69,6 +67,17 @@ func New(src source.Source, st *store.Store, interval time.Duration, log *slog.L
 		log:      log,
 		kick:     make(chan struct{}, 1),
 	}
+}
+
+// EffectiveInterval is the cadence the watcher will really use. A positive
+// value under a second is rounded up; zero or below means no polling at all.
+// Callers that report the cadence must go through this, or they announce a
+// number the watcher does not honour.
+func EffectiveInterval(d time.Duration) time.Duration {
+	if d > 0 && d < time.Second {
+		return time.Second
+	}
+	return d
 }
 
 // polling reports whether Run should also re-check on a timer. When false the
@@ -284,8 +293,15 @@ func (w *Watcher) fetchExtras(ctx context.Context, cfg *nav.Config) (css []byte,
 		// Keep serving the copy already in the store rather than dropping the
 		// styling over a transient git failure.
 		if prev, prevRev, ok := w.store.CSS(); ok {
-			w.log.Debug("keeping the previous custom css", "path", path, "error", err)
-			return prev, prevRev, nil
+			// Keep styling rather than dropping it over what may be a transient
+			// failure -- but report it. Staying quiet makes a permanently wrong
+			// path indistinguishable from a working one: nav.yaml names one file
+			// while /theme.css serves another, indefinitely, with no warning
+			// anywhere for an operator to notice.
+			w.log.Warn("keeping the previous custom css", "path", path, "error", err)
+			return prev, prevRev, []string{fmt.Sprintf(
+				"style.customCss: %s could not be read (%v); still serving the previous stylesheet",
+				path, err)}
 		}
 		return nil, "", []string{"style.customCss: " + err.Error()}
 	}

@@ -35,13 +35,17 @@ import (
 // cache is bounded to a few megabytes and no single fetch can hold a request
 // open for long.
 const (
-	defaultTTL          = 24 * time.Hour
-	defaultFailureTTL   = 5 * time.Minute
-	defaultMaxEntries   = 512
-	defaultMaxBytes     = 512 << 10
-	defaultMaxHTMLBytes = 256 << 10
-	defaultTimeout      = 8 * time.Second
-	defaultUserAgent    = "ghome-icons/1.0 (+https://github.com/vrocwang/ghome)"
+	defaultTTL        = 24 * time.Hour
+	defaultFailureTTL = 5 * time.Minute
+	defaultMaxEntries = 512
+	// MaxEntries alone bounds nothing useful: 512 entries x 512KiB is 256MiB,
+	// which is not what "a few megabytes of icon cache" should mean on a box
+	// that otherwise idles at twelve. The byte budget is what actually bounds it.
+	defaultMaxTotalBytes = 8 << 20
+	defaultMaxBytes      = 512 << 10
+	defaultMaxHTMLBytes  = 256 << 10
+	defaultTimeout       = 8 * time.Second
+	defaultUserAgent     = "ghome-icons/1.0 (+https://github.com/vrocwang/ghome)"
 )
 
 const (
@@ -69,6 +73,9 @@ type Options struct {
 	MaxEntries int
 	// MaxBytes bounds a single icon body. Default 512KB.
 	MaxBytes int64
+
+	// MaxTotalBytes bounds the whole cache. Default 8MB.
+	MaxTotalBytes int64
 	// MaxHTMLBytes bounds how much of a page we read while looking for the
 	// icon link. Default 256KB.
 	MaxHTMLBytes int64
@@ -101,6 +108,7 @@ type Resolver struct {
 	mu     sync.Mutex
 	lru    *list.List
 	byKey  map[string]*list.Element
+	bytes  int64 // total cached icon bytes, kept in step with the list
 	hits   uint64
 	misses uint64
 
@@ -122,6 +130,9 @@ func New(opts Options) *Resolver {
 	}
 	if opts.MaxBytes <= 0 {
 		opts.MaxBytes = defaultMaxBytes
+	}
+	if opts.MaxTotalBytes <= 0 {
+		opts.MaxTotalBytes = defaultMaxTotalBytes
 	}
 	if opts.MaxHTMLBytes <= 0 {
 		opts.MaxHTMLBytes = defaultMaxHTMLBytes
@@ -661,6 +672,10 @@ type entry struct {
 	expires time.Time
 }
 
+// size is what this entry contributes to the resolver's byte budget. A cached
+// miss carries no body, so it costs an entry slot but no bytes.
+func (e *entry) size() int64 { return int64(len(e.icon.Data)) }
+
 // get returns a fresh cached answer. fresh is false when the key is absent or
 // stale, in which case the caller has to do real work.
 func (r *Resolver) get(key string) (icon Icon, ok, fresh bool) {
@@ -688,13 +703,24 @@ func (r *Resolver) put(key string, icon Icon, ok bool, ttl time.Duration) {
 	expires := time.Now().Add(ttl)
 	if el, found := r.byKey[key]; found {
 		e := el.Value.(*entry)
+		r.bytes += int64(len(icon.Data)) - e.size()
 		e.icon, e.ok, e.expires = icon, ok, expires
 		r.lru.MoveToFront(el)
+		r.evictLocked()
 		return
 	}
 
-	r.byKey[key] = r.lru.PushFront(&entry{key: key, icon: icon, ok: ok, expires: expires})
-	for r.lru.Len() > r.opts.MaxEntries {
+	e := &entry{key: key, icon: icon, ok: ok, expires: expires}
+	r.byKey[key] = r.lru.PushFront(e)
+	r.bytes += e.size()
+	r.evictLocked()
+}
+
+// evictLocked drops least-recently-used entries until both limits hold. Both
+// are needed: the count keeps a flood of tiny answers from growing without
+// bound, and the byte budget keeps a handful of large ones from doing the same.
+func (r *Resolver) evictLocked() {
+	for r.lru.Len() > r.opts.MaxEntries || r.bytes > r.opts.MaxTotalBytes {
 		oldest := r.lru.Back()
 		if oldest == nil {
 			return
@@ -704,8 +730,10 @@ func (r *Resolver) put(key string, icon Icon, ok bool, ttl time.Duration) {
 }
 
 func (r *Resolver) removeLocked(el *list.Element) {
+	e := el.Value.(*entry)
+	r.bytes -= e.size()
 	r.lru.Remove(el)
-	delete(r.byKey, el.Value.(*entry).key)
+	delete(r.byKey, e.key)
 }
 
 func (r *Resolver) countHit() {

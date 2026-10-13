@@ -533,6 +533,17 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	h.Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
 
+	// Subscribe before reading the snapshot, not after.
+	//
+	// The other order drops an update that lands in between: notify only
+	// signals current subscribers, the watcher will not publish the same
+	// fingerprint a second time, and a healthy stream never reconnects -- so the
+	// client would keep the revision it was handed until some unrelated event.
+	// A token that arrives during this window is simply delivered as an
+	// immediate "changed" once the loop starts.
+	updates, cancel := s.store.Subscribe()
+	defer cancel()
+
 	// Hand the client the revision it should already have, so a page that
 	// loaded during a refresh can catch up without waiting for the next push.
 	if payload, ok := s.store.Get(); ok {
@@ -541,9 +552,6 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 		writeSSE(w, "hello", "", `{"revision":""}`)
 	}
 	flusher.Flush()
-
-	updates, cancel := s.store.Subscribe()
-	defer cancel()
 
 	// Comment frames keep proxies and NATs from dropping an idle connection.
 	heartbeat := time.NewTicker(25 * time.Second)

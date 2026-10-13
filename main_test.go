@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"maps"
@@ -463,5 +464,50 @@ func TestReadmeDocumentsEveryFlag(t *testing.T) {
 		if !declared[name] {
 			t.Errorf("README.md documents --%s, which the program does not define", name)
 		}
+	}
+}
+
+// The supervisor has to hand the targets over before the prober starts.
+//
+// Run's first act is an immediate round that snapshots the target list, while
+// SetTargets does its filtering, de-duplication and sorting before taking the
+// lock. Starting the prober first therefore lets the opening round probe nothing
+// at all; an empty result set is not a change, so nothing is broadcast and no
+// dot is filled in until a whole interval has passed -- 60 seconds by default,
+// on every start and every cadence change.
+//
+// Many links are used deliberately: the more there are, the longer SetTargets
+// runs before it takes the lock, and the more reliably the opening round loses.
+func TestProberIsGivenItsTargetsBeforeItsFirstRound(t *testing.T) {
+	hit := make(chan struct{}, 1)
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case hit <- struct{}{}:
+		default:
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer target.Close()
+
+	var links strings.Builder
+	for i := 0; i < 400; i++ {
+		fmt.Fprintf(&links, "      - name: svc%d\n        url: %s/%d\n", i, target.URL, i)
+	}
+	doc := "status:\n  enabled: true\n  interval: 10m\n  timeout: 2s\n" +
+		"groups:\n  - name: x\n    links:\n" + links.String()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	p := newProber(ctx, store.New(), discardLogger())
+
+	// A ten minute interval means that if the opening round misses, nothing
+	// probes again for far longer than this test waits.
+	p.apply(parseCfg(t, doc))
+
+	select {
+	case <-hit:
+	case <-time.After(5 * time.Second):
+		t.Error("no target was probed: the first round ran before the targets were set, " +
+			"so the status lights stay unknown until the next interval")
 	}
 }

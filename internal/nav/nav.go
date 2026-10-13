@@ -678,8 +678,19 @@ func CSSFontFamily(v string) bool {
 
 // safeRepoPath keeps style.customCss from pointing outside the repository.
 func safeRepoPath(v string) bool {
-	if strings.HasPrefix(v, "/") || strings.Contains(v, "..") {
+	if !strings.HasSuffix(strings.ToLower(v), ".css") {
 		return false
+	}
+	if strings.HasPrefix(v, "/") || strings.Contains(v, "..") || strings.Contains(v, "\\") {
+		return false
+	}
+	// The same segment rules the sources apply, so a path that passes here can
+	// actually be fetched. Accepting "a//b.css" or "./x.css" only produced a
+	// config that validated and then never loaded its stylesheet.
+	for _, part := range strings.Split(v, "/") {
+		if part == "" || part == "." {
+			return false
+		}
 	}
 	for _, r := range v {
 		switch {
@@ -689,7 +700,7 @@ func safeRepoPath(v string) bool {
 			return false
 		}
 	}
-	return strings.HasSuffix(strings.ToLower(v), ".css")
+	return true
 }
 
 func cleanList(in []string) []string {

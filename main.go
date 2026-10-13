@@ -104,15 +104,28 @@ func run() error {
 	iconCache := icons.New(icons.Options{Dir: o.iconDir, Logger: log})
 	probes := newProber(ctx, st, log)
 
-	watch := watcher.New(src, st, o.poll, log)
-	watch.OnUpdate = func(cfg *nav.Config) {
-		saveCache(o.cacheFile, st.Raw(), log)
-		// Every piece of derived state is kept in step from this one hook, so
-		// there is no way for the icon allow-list or the probe targets to drift
-		// away from the config that is actually being served.
+	// Every piece of derived state is kept in step from this one function, so
+	// there is no way for the icon allow-list or the probe targets to drift away
+	// from the config that is actually being served.
+	applyConfig := func(cfg *nav.Config) {
 		iconCache.Allow(cfg.PageURLs())
 		iconCache.Warm(ctx, cfg.PageURLs())
 		probes.apply(cfg)
+	}
+
+	watch := watcher.New(src, st, o.poll, log)
+	watch.OnUpdate = func(cfg *nav.Config) {
+		saveCache(o.cacheFile, st.Raw(), log)
+		applyConfig(cfg)
+	}
+
+	// A config restored from the cache never passed through OnUpdate, so its
+	// derived state has to be built here as well. Without this a restart while
+	// the forge is unreachable serves the cached page with every icon degraded
+	// to a letter avatar and every status light stuck on "checking" -- in exactly
+	// the situation the cache exists for.
+	if payload, ok := st.Get(); ok {
+		applyConfig(&payload.Config)
 	}
 
 	branch := o.branch
@@ -158,9 +171,18 @@ func run() error {
 
 	// WriteTimeout stays unset on purpose: /api/events is a long lived stream
 	// and a write deadline would kill it mid-flight.
+	//
+	// ReadTimeout covers the whole request, body included, which
+	// ReadHeaderTimeout does not and IdleTimeout only does between requests.
+	// Without it an unauthenticated caller can send a complete header block with
+	// a large Content-Length, then one byte, and the webhook handler sits in the
+	// body read forever with the signature check never reached. It does not
+	// affect /api/events: that request has no body, so the read finishes at once
+	// and only the (unbounded) write side stays open.
 	httpSrv := &http.Server{
 		Handler:           srv,
 		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
@@ -275,14 +297,19 @@ func (p *prober) apply(cfg *nav.Config) {
 	}
 	if p.cancel != nil {
 		p.cancel()
+		p.current.Close()
 	}
 
 	ctx, cancel := context.WithCancel(p.parent)
 	probe := status.New(opts)
 	p.current, p.cancel, p.applied, p.started = probe, cancel, opts, true
 
-	go probe.Run(ctx, func() { p.store.Notify() })
+	// Targets first, then start. Run begins with an immediate round, so
+	// starting it first would let that round probe nothing at all -- and an
+	// empty result set is not a change, so nothing would be broadcast and the
+	// status lights would stay unknown until the next interval.
 	probe.SetTargets(targets)
+	go probe.Run(ctx, func() { p.store.Notify() })
 }
 
 func (p *prober) stop() {
@@ -531,7 +558,7 @@ func runHealthcheck(o options) error {
 // pollLabel describes the re-check cadence, including the fact that it can be
 // switched off. A bare "0s" in the startup line reads like a misconfiguration.
 func pollLabel(d time.Duration) string {
-	if d <= 0 {
+	if d = watcher.EffectiveInterval(d); d <= 0 {
 		return "off"
 	}
 	return d.Round(time.Second).String()

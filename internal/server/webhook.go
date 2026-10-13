@@ -7,6 +7,8 @@ import (
 	"crypto/subtle"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"hash"
 	"io"
 	"net/http"
@@ -38,8 +40,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := io.ReadAll(io.LimitReader(r.Body, maxWebhookBody))
+	// MaxBytesReader rather than LimitReader: an oversized body is refused
+	// outright instead of being silently truncated to something whose signature
+	// cannot match, and the reader tells the server to hang up afterwards.
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxWebhookBody))
 	if err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			s.writeJSON(w, http.StatusRequestEntityTooLarge, navError{
+				Error: fmt.Sprintf("webhook body exceeds %d bytes", maxWebhookBody),
+			})
+			return
+		}
 		s.writeJSON(w, http.StatusBadRequest, navError{Error: "could not read request body"})
 		return
 	}

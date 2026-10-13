@@ -170,6 +170,15 @@ func (p *Prober) SetTargets(urls []string) {
 // can be pushed to browsers over SSE without every round broadcasting identical
 // data. The first round counts as a change, so clients learn the initial
 // states. onChange may be nil.
+// Close releases the idle sockets the prober has pooled. A prober that is being
+// replaced would otherwise keep its transport alive for the idle timeout, which
+// shows up as a slow climb in goroutines on a box that reloads often.
+func (p *Prober) Close() {
+	if p.client != nil {
+		p.client.CloseIdleConnections()
+	}
+}
+
 func (p *Prober) Run(ctx context.Context, onChange func()) {
 	if ctx.Err() != nil {
 		return

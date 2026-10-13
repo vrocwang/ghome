@@ -162,7 +162,7 @@ func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if err := g.checkStatus(resp, endpoint); err != nil {
+	if err := g.checkStatus(resp, path, endpoint); err != nil {
 		return Snapshot{}, err
 	}
 
@@ -191,13 +191,17 @@ func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 	return Snapshot{Data: data, Rev: rev}, nil
 }
 
-func (g *Gitea) checkStatus(resp *http.Response, endpoint string) error {
+// checkStatus turns a non-200 into something an operator can act on. The path
+// being read is passed in rather than taken from g.path: a sibling file such as
+// the custom stylesheet is fetched through the same helper, and blaming nav.yaml
+// for a missing stylesheet sends the reader to the wrong place.
+func (g *Gitea) checkStatus(resp *http.Response, path, endpoint string) error {
 	switch resp.StatusCode {
 	case http.StatusOK:
 		return nil
 	case http.StatusNotFound:
 		return fmt.Errorf("%s 404: %s not found in %s/%s at ref %q (check the path, the ref, and the token's repository scope)",
-			g.kind, g.path, g.owner, g.repo, g.ref)
+			g.kind, path, g.owner, g.repo, g.ref)
 	case http.StatusUnauthorized:
 		return fmt.Errorf("%s 401: the access token was rejected (is it expired or revoked?)", g.kind)
 	case http.StatusForbidden:
@@ -225,7 +229,7 @@ func (g *Gitea) fetchRaw(ctx context.Context, path string) ([]byte, error) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	if err := g.checkStatus(resp, endpoint); err != nil {
+	if err := g.checkStatus(resp, path, endpoint); err != nil {
 		return nil, err
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
