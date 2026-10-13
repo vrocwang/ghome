@@ -1,0 +1,57 @@
+[Unit]
+Description=ghome — git driven navigation page
+Documentation=https://github.com/simon/ghome
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ghome
+Group=ghome
+
+# All configuration lives in this file: copy ghome.env.example, fill it in,
+# then `chmod 600` it because it holds your Gitea token.
+EnvironmentFile=/etc/ghome/ghome.env
+
+# Every flag can also come from the environment, so no secrets end up in the
+# process list.
+ExecStart=/usr/local/bin/ghome --listen=127.0.0.1:8080 --cache-file=/var/lib/ghome/cache.yaml
+
+Restart=always
+RestartSec=3
+
+# journald picks up stdout/stderr: `journalctl -u ghome -f`
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ghome
+
+# ---- hardening ----
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictAddressFamilies=AF_INET AF_INET6
+RestrictNamespaces=true
+RestrictRealtime=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+CapabilityBoundingSet=
+# StateDirectory makes /var/lib/ghome writable despite ProtectSystem=strict.
+StateDirectory=ghome
+
+# ---- resource ceiling ----
+# ghome idles around 10 MB. The cap is here so a runaway cannot take the box
+# down; raise it if you serve a lot of concurrent browsers.
+MemoryMax=96M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

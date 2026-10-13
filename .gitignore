@@ -1,0 +1,9 @@
+/bin/
+/dist/
+/.gocache/
+ghome-cache.yaml
+*.tmp
+
+# macOS Finder metadata
+.DS_Store
+**/.DS_Store

@@ -1,0 +1,97 @@
+# ghome 导航配置
+#
+# 这份文件放在你的 git 仓库里。push 之后导航页面自动更新，不需要重新部署。
+# 完整字段说明见 nav.example.yaml。
+
+site:
+  title: 我的导航
+  subtitle: 团队内部服务入口
+  logo: "🧭"
+  footer: "配置托管在 git · 改完 push 即生效"
+
+theme: auto        # auto | light | dark
+layout: grid       # grid（精致卡片）| dashboard（紧凑密集）| list（单列）
+
+# 外观令牌：改这里就等于改样式，push 即生效，不需要重新编译。
+# 想大改样式就在同一个仓库里加 custom.css，然后用 style.customCss 指过去。
+style:
+  accent: "#3b6ef6"
+  radius: 16
+  density: comfortable
+  cardStyle: soft
+  # customCss: "custom.css"
+
+search:
+  enabled: true
+  hotkey: "/"
+  engines:
+    - name: Google
+      keyword: g
+      url: "https://www.google.com/search?q={q}"
+    - name: Bing
+      keyword: b
+      url: "https://www.bing.com/search?q={q}"
+
+# 服务状态灯。默认关闭，关着的时候服务端一个探测请求都不发。
+# 打开后每个链接右边会出现绿/红点，右上角显示在线数，点它可以只看异常的服务。
+status:
+  enabled: false
+  interval: 60s
+  timeout: 5s
+
+groups:
+  - name: 代码与协作
+    icon: "⌨️"
+    description: 日常开发
+    color: "#2f9e6f"
+    links:
+      - name: Gitea
+        url: https://git.example.com
+        description: 自建代码托管
+        tags: [git, 私有]
+        hotkey: g
+        pinned: true          # 提升到页面顶部的置顶区
+      - name: CI 流水线
+        url: https://ci.example.com
+        description: 构建与发布
+        tags: [ci]
+      - name: 制品仓库
+        url: https://nexus.example.com
+        description: Maven / npm / Docker
+        tags: [artifact]
+
+  - name: 运维监控
+    icon: "📊"
+    color: "#2b8fa8"
+    links:
+      - name: Grafana
+        url: https://grafana.example.com
+        description: 指标看板
+        hotkey: m
+        pinned: true
+      - name: Prometheus
+        url: https://prometheus.example.com
+        description: 告警规则与查询
+      - name: 日志检索
+        url: https://logs.example.com
+        description: 按 trace id 查链路
+
+  - name: 文档与知识
+    icon: "📚"
+    color: "#9a5cd0"
+    links:
+      - name: Wiki
+        url: https://wiki.example.com
+        description: 内部知识库
+        hotkey: w
+      - name: API 文档
+        url: https://api.example.com/docs
+        description: 接口说明
+      - name: 内网邮箱
+        url: mailto:team@example.com
+        description: 走 mailto，不开新窗口
+        newTab: false
+      - name: 跳板机
+        url: ssh://git@10.0.0.5:2222
+        description: 非 http 协议现在也允许了
+        probe: false          # 探不了，显式关掉

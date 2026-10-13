@@ -1,0 +1,59 @@
+/* ghome —— 配置仓里的自定义样式表
+ *
+ * 用法：把本文件改名为 custom.css 放进配置仓，然后在 nav.yaml 里写：
+ *
+ *   style:
+ *     customCss: "custom.css"
+ *
+ * 它的内容会被 ghome 追加到 /theme.css 后面（也就是内嵌样式表和 style 令牌之后），
+ * 所以这里写的规则天然拥有更高优先级。改完 push 即生效，不需要重启、不需要重新编译。
+ *
+ * 什么样的改动该放这里：
+ *   - 内嵌样式表没暴露成令牌的细节（比如某个元素的字重、下划线、间距）
+ *   - 想给某个分组 / 某个链接单独开小灶
+ *   - 想加一层纯 CSS 的装饰（渐变、纹理、纹理动画）
+ *
+ * 什么样的改动不该放这里：
+ *   - 改主色、圆角、字号、密度 → 用 nav.yaml 的 style: 块，那是官方入口
+ *   - 改 DOM 结构、加新的视图 / 交互 → 用 ghome --dump-web 导出前端再改，
+ *     然后 --web-dir 指过去；只有这种情况才需要碰 ghome 的文件
+ */
+
+/* ---- 示例：只给第一个分组加一条强调边 ---- */
+/*
+.groups .group:first-child {
+  box-shadow: 0 0 0 1px var(--accent), var(--card-shadow);
+}
+*/
+
+/* ---- 示例：让链接名的下划线只在自己写的某个 class 上出现 ---- */
+/*
+.link:hover .nm { text-decoration: underline; text-decoration-color: var(--accent); }
+*/
+
+/* ---- 示例：用分组色做个渐变标题 ---- */
+/*
+.group-name {
+  background: linear-gradient(90deg, var(--group-accent), var(--text));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+*/
+
+/* ---- 示例：整页换个背景 ---- */
+/*
+body {
+  background:
+    radial-gradient(900px 400px at 15% -10%, color-mix(in srgb, var(--accent) 18%, transparent), transparent 60%),
+    var(--bg);
+}
+*/
+
+/* 能用的 CSS 变量（内嵌样式表和 /theme.css 都基于它们）：
+ *   --accent  --bg  --surface  --text  --muted  --border  --faint  --sunken
+ *   --radius  --radius-sm  --font-size  --max-width  --icon-size
+ *   --gap  --card-padding  --link-padding  --card-shadow  --card-shadow-hover
+ *   --font-family  --ok  --warn  --bad
+ * 另外每个分组卡片上有一个 --group-accent（来自该分组的 color 字段）。
+ */

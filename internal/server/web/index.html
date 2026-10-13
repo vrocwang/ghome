@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light" data-theme-pref="auto" data-layout="grid">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<meta name="robots" content="noindex, nofollow">
+<title>导航</title>
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="assets/style.css">
+<!-- Design tokens from nav.yaml plus the repository's custom.css. Loaded after
+     the base stylesheet so a configured token wins. -->
+<link rel="stylesheet" href="theme.css" id="themeSheet">
+<!-- Loaded synchronously so the correct theme is set before the first paint. -->
+<script src="assets/theme.js"></script>
+</head>
+<body>
+<div class="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-logo" id="brandLogo" hidden></span>
+      <div class="brand-text">
+        <h1 id="siteTitle">导航</h1>
+        <p class="subtitle" id="siteSubtitle" hidden></p>
+      </div>
+    </div>
+    <div class="actions">
+      <button class="health" id="healthPill" type="button" hidden>
+        <span class="dot" id="healthDot"></span>
+        <span id="healthText"></span>
+      </button>
+      <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题">
+        <svg class="ico ico-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" class="fill"/></svg>
+        <svg class="ico ico-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.6M12 19.4V22M4.2 4.2l1.9 1.9M17.9 17.9l1.9 1.9M2 12h2.6M19.4 12H22M4.2 19.8l1.9-1.9M17.9 6.1l1.9-1.9"/></svg>
+        <svg class="ico ico-dark" viewBox="0 0 24 24" aria-hidden="true"><path d="M20.5 14.2A8.6 8.6 0 0 1 9.8 3.5a8.7 8.7 0 1 0 10.7 10.7z"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <div class="searchbar" id="searchBar" hidden>
+    <svg class="search-icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="6.5"/><path d="M16 16l4.5 4.5"/></svg>
+    <input id="searchInput" type="text" placeholder="搜索…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="搜索导航">
+    <kbd id="searchHint">/</kbd>
+  </div>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <section class="pinned" id="pinned" hidden>
+    <h2 class="section-title">置顶</h2>
+    <div class="pinned-row" id="pinnedRow"></div>
+  </section>
+
+  <main class="content" id="content">
+    <div class="state" id="stateBox">
+      <div class="spinner" aria-hidden="true"></div>
+      <p class="state-text" id="stateText">加载中…</p>
+      <button class="button" id="retryButton" type="button" hidden>重试</button>
+    </div>
+  </main>
+
+  <footer class="footer">
+    <span id="siteFooter"></span>
+    <span class="meta" id="metaLine"></span>
+  </footer>
+
+</div>
+
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+<script src="assets/app.js" defer></script>
+</body>
+</html>

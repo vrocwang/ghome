@@ -1,0 +1,113 @@
+# ghome 配置完整参考
+#
+# 每一段都可以省略，省略后使用括号里的默认值。
+#
+# 两类问题的处理方式不同：
+#   * 结构性问题（缺 url、用了危险协议、YAML 语法错）→ 整份配置拒绝，
+#     页面继续显示上一版好配置。
+#   * 外观性问题（字段名拼错、颜色值写错）→ 只记 warning，其余照常生效，
+#     页面顶部会有一条提示，/healthz 里也能看到。
+# 这样既不会因为一个可选项打错字就整页挂掉，也不会让你永远不知道自己写错了。
+
+# ---------------------------------------------------------------- 站点信息
+site:
+  title: 我的导航          # (导航)
+  subtitle: 团队内部服务入口    # (空)
+  logo: "🧭"              # (空) emoji、短字符，或图片 URL
+  footer: "改完 push 即生效"   # (空)
+
+# ---------------------------------------------------------------- 外观
+theme: auto               # auto | light | dark，默认 auto（跟随系统）
+                          # 用户手动切换后的选择存在浏览器里，优先级更高
+
+layout: grid              # grid | dashboard | list，默认 grid
+                          #   grid      精致卡片，每组一张卡，信息舒展
+                          #   dashboard 紧凑密集，分组带色条，适合服务很多时
+                          #   list      单列，组内链接横向排列，最省纵向空间
+
+# 设计令牌。它们由 /theme.css 以 CSS 变量发给浏览器，所以改样式不需要重新编译。
+# 任何一项写错只会被忽略并记一条 warning，不会让页面挂掉。
+style:
+  accent: "#3b6ef6"       # (内置) 主色。支持 #hex / rgb() / hsl() / 颜色关键字
+  background: "#f4f5f8"   # (内置) 页面底色
+  surface: "#ffffff"      # (内置) 卡片底色
+  text: "#14161b"         # (内置) 正文色
+  muted: "#646c7a"        # (内置) 次要文字色
+  border: "#e3e6ec"       # (内置) 描边色
+  font: "Inter, system-ui, sans-serif"   # (内置) 字体栈
+  radius: 16              # (16) 圆角，像素，0~48
+  fontSize: 15            # (15) 正文字号，像素，11~24
+  width: 1240             # (1240) 内容最大宽度，像素，480~3840
+  iconSize: 20            # (20) 图标边长，像素，12~64
+  density: comfortable    # comfortable | compact
+  cardStyle: soft         # soft | flat | strong
+  # 指向同一个仓库里的样式表，内容会追加到 /theme.css 后面。
+  # 想大改样式时用它，改完 push 即生效，不需要碰 ghome 的代码。
+  customCss: "custom.css"
+
+# ---------------------------------------------------------------- 搜索
+search:
+  enabled: true           # (true) 关掉则不显示搜索框
+  hotkey: "/"             # ("/") 按此键聚焦搜索框；Cmd/Ctrl+K 始终可用
+  engines:                # (空) 可选。没配就只做本地过滤，不做网页搜索
+    - name: Google
+      keyword: g          # 输入 "g 关键词" 回车直接用这个引擎搜
+      url: "https://www.google.com/search?q={q}"   # {q} 是必填占位符
+    - name: Bing
+      keyword: b
+      url: "https://www.bing.com/search?q={q}"
+    - name: 内网检索
+      url: "https://search.example.com/?q={q}"     # 不写 keyword 就是默认引擎
+
+# ---------------------------------------------------------------- 服务状态灯
+# 默认关闭，关着的时候服务端一个探测请求都不发。
+status:
+  enabled: false          # (false)
+  interval: 60s           # (60s) 探测间隔，最小 5s
+  timeout: 5s             # (5s) 单个探测超时
+  concurrency: 8          # (8) 并发上限，最大 64
+
+# ---------------------------------------------------------------- 分组
+# 空分组会被自动忽略；至少要有一个分组里至少有一个链接。
+groups:
+  - name: 代码与协作        # (必填)
+    icon: "⌨️"             # (空) 显示在分组标题前
+    description: 日常开发    # (空)
+    color: "#2f9e6f"       # (空) 这组的主色，用于图标底和卡片描边
+    links:
+      - name: Gitea                      # (必填)
+        url: https://git.example.com     # (必填)
+        description: 自建代码托管          # (空) 副标题，搜索也会匹配它
+        icon: auto                       # (auto) auto = 服务端解析并缓存站点图标
+                                         #   也可以写图片 URL、/ 开头的同源路径，或一个 emoji
+        tags: [git, 私有]                 # (空) 右侧小标签，搜索也会匹配它
+        hotkey: g                        # (空) 单字符，页面任意位置按下即跳转
+        newTab: true                     # (true) false 表示当前标签页打开
+        pinned: false                    # (false) true 会提升到页面顶部的置顶区
+        probe: true                      # (true) false 表示这个链接不参与状态探测
+
+      - name: 跳板机
+        url: ssh://git@10.0.0.5:2222     # 除 javascript:/data: 等危险协议外都允许
+        description: 内网跳板
+        probe: false                     # ssh 探不了，显式关掉更清楚
+
+      - name: 内网邮箱
+        url: mailto:team@example.com
+        newTab: false
+
+      - name: 纯图标站点
+        url: https://example.com
+        icon: "🚀"                        # emoji 图标，不请求图标解析
+
+# ---------------------------------------------------------------- 关于置顶
+# pinned: true 的链接只会出现在页面顶部的置顶区，不会再出现在它所属的分组里，
+# 避免同一个入口在页面上出现两次。如果某个分组因此变空，该分组会被隐藏。
+
+# ---------------------------------------------------------------- 校验规则
+#   * url 必须带协议；javascript: / data: / vbscript: / blob: 会被拒绝
+#     （只拦这四种真正能执行内容的协议，ssh: / vscode: / smb: / rdp: 都放行）
+#   * hotkey 必须是单个字符
+#   * engines[].url 必须包含 {q}
+#   * style 里颜色只接受 #hex / rgb() / hsl() / 颜色关键字，字体只接受字体栈字符
+#   * style.customCss 必须是仓库内的相对路径，且以 .css 结尾
+#   * 字段名拼错不会报错，只会出现在页面顶部的提示条和 /healthz 的 warnings 里
