@@ -174,14 +174,14 @@ ghome --web-dir=/srv/ghome/web ...       # 指过去
 ### 2. 跑起来
 
 ```bash
-export GHOME_GITEA_TOKEN=你的token
+export GHOME_FORGE_TOKEN=你的token
 
 ./bin/ghome \
   --source=forgejo \          # 用 Gitea 就写 gitea，两者走同一套代码
-  --gitea-url=https://git.example.com \
-  --gitea-owner=simon \
-  --gitea-repo=nav \
-  --gitea-ref=main \
+  --forge-url=https://git.example.com \
+  --forge-owner=simon \
+  --forge-repo=homepage \
+  --forge-ref=main \
   --webhook-secret=$(openssl rand -hex 32)
 ```
 
@@ -230,7 +230,7 @@ export GHOME_GITEA_TOKEN=你的token
 Forgejo 是 Gitea 的 fork，**配置方式几乎一样**，只有两处要留意：
 
 1. **签名头。** 较老的 Forgejo 源码里只 `Add` 了 `X-Gitea-Signature`；官方文档展示的是 `X-Forgejo-Signature`；事件头则是 `X-Forgejo-Event` 与 `X-Gitea-Event` 并列发出。所以 ghome 这几类头**任意一个匹配即通过**，你不用关心自己那版发哪个。
-2. **flag 名字仍叫 `--gitea-*`。** `--gitea-url` / `--gitea-owner` / `--gitea-repo` / `--gitea-token` 对 Forgejo 一样用（API 路径完全兼容）。`--source` 写 `forgejo` 会让 `/healthz` 和日志显示 `forgejo:...`，写 `gitea` 就显示 `gitea:...`，纯粹是标签，不影响行为。
+2. **flag 用中性的 `--forge-*`。** `--forge-url` / `--forge-owner` / `--forge-repo` / `--forge-token` 对两个产品一样用（API 路径完全兼容）。`--source` 写 `forgejo` 会让 `/healthz` 和日志显示 `forgejo:...`，写 `gitea` 就显示 `gitea:...`，纯粹是标签，不影响行为。
 
 ### 4. 验证
 
@@ -467,9 +467,9 @@ journalctl -u ghome -f
 docker build -t ghome .
 docker run -d --name ghome -p 8080:8080 \
   -e GHOME_SOURCE=gitea \
-  -e GHOME_GITEA_URL=https://git.example.com \
-  -e GHOME_GITEA_OWNER=simon -e GHOME_GITEA_REPO=nav \
-  -e GHOME_GITEA_TOKEN=... -e GHOME_WEBHOOK_SECRET=... \
+  -e GHOME_FORGE_URL=https://git.example.com \
+  -e GHOME_FORGE_OWNER=simon -e GHOME_FORGE_REPO=homepage \
+  -e GHOME_FORGE_TOKEN=... -e GHOME_WEBHOOK_SECRET=... \
   ghome
 ```
 
@@ -507,15 +507,17 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `--listen` | `GHOME_LISTEN` | `:8080` | 监听地址。建议 `127.0.0.1:8080` 交给 nginx |
 | `--source` | `GHOME_SOURCE` | `file` | `file` / `gitea` / `forgejo`（后两者同一套代码） |
 | `--file` | `GHOME_FILE` | `nav.yaml` | `file` 模式下的路径 |
-| `--gitea-url` | `GHOME_GITEA_URL` | | Gitea 根地址，支持反代子路径 |
-| `--gitea-owner` | `GHOME_GITEA_OWNER` | | 用户名或组织 |
-| `--gitea-repo` | `GHOME_GITEA_REPO` | | 仓库名 |
-| `--gitea-ref` | `GHOME_GITEA_REF` | `main` | 分支、tag 或 commit SHA |
-| `--gitea-path` | `GHOME_GITEA_PATH` | `nav.yaml` | 仓内路径 |
-| `--gitea-token` | `GHOME_GITEA_TOKEN` | | 只读 token（私有仓必填） |
+| `--forge-url` | `GHOME_FORGE_URL` | | forge 根地址（Gitea / Forgejo），支持反代子路径 |
+| `--forge-owner` | `GHOME_FORGE_OWNER` | | 用户名或组织 |
+| `--forge-repo` | `GHOME_FORGE_REPO` | | 仓库名 |
+| `--forge-ref` | `GHOME_FORGE_REF` | `main` | 分支、tag 或 commit SHA |
+| `--forge-path` | `GHOME_FORGE_PATH` | `nav.yaml` | 仓内路径 |
+| `--forge-token` | `GHOME_FORGE_TOKEN` | | 只读 token（私有仓必填） |
+
+> 这几个 flag 以前叫 `--gitea-*`（环境变量 `GHOME_GITEA_*`）。**旧名仍然可用**，是等价别名，不会出现在 `--help` 里；新旧同时给时新名优先。改名是因为 Gitea 和 Forgejo 说同一个 API，用其中一个产品的名字命名这套参数会让人以为只支持那个。
 | `--poll` | `GHOME_POLL` | `60s` | 轮询间隔，webhook 之外的兜底 |
 | `--webhook-secret` | `GHOME_WEBHOOK_SECRET` | | HMAC 密钥；不填则 `/api/webhook` 禁用 |
-| `--branch` | `GHOME_BRANCH` | 取 `--gitea-ref` | 只响应这个分支的推送 |
+| `--branch` | `GHOME_BRANCH` | 取 `--forge-ref` | 只响应这个分支的推送 |
 | `--admin-token` | `GHOME_ADMIN_TOKEN` | | `/api/refresh` 的 bearer token；不填则该接口禁用 |
 | `--base-path` | `GHOME_BASE_PATH` | | 挂到子路径，例如 `/nav` |
 | `--cache-file` | `GHOME_CACHE_FILE` | | 把最后一次好配置落盘，git 挂了也能重启 |
@@ -525,7 +527,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `--log-level` | `GHOME_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--version` | | | 打印版本 |
 
-`--gitea-ref` 写完整 commit SHA 时，webhook 的分支过滤会自动关闭（否则推任何分支都匹配不上，通知会被全部忽略）。
+`--forge-ref` 写完整 commit SHA 时，webhook 的分支过滤会自动关闭（否则推任何分支都匹配不上，通知会被全部忽略）。
 
 ---
 
@@ -581,7 +583,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | 页面一直"配置尚未就绪" | 首次拉取就没成功 | `curl localhost:8080/healthz`，看 `lastError` |
 | `gitea 401` | token 过期/被撤销 | 重新生成 token |
 | `gitea 403` | token 没有这个仓的读权限 | 生成时勾 `repository: read` |
-| `gitea 404` 但文件明明在 | `--gitea-ref` 或 `--gitea-path` 不对 | 注意大小写；`--gitea-path` 是仓内相对路径 |
+| `forge 404` 但文件明明在 | `--forge-ref` 或 `--forge-path` 不对 | 注意大小写；`--gitea-path` 是仓内相对路径 |
 | push 了但页面要等一分钟 | webhook 没通，走的轮询 | Gitea 网页钩子的"最近投递"看有没有 200 |
 | webhook 报 401 | 密钥两边不一致 | 仓库设置里的密钥和 `--webhook-secret` 必须逐字符相同 |
 | 以为自己在跑 Gitea，其实是 Forgejo | `/api/v1/version` 报的 `16.0.5+gitea-1.22.0` 里，`+gitea-` 后是**兼容的 Gitea API 版本** | `curl 你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo |

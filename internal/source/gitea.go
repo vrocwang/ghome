@@ -59,23 +59,23 @@ type GiteaOptions struct {
 func NewGitea(o GiteaOptions) (*Gitea, error) {
 	base := strings.TrimRight(strings.TrimSpace(o.BaseURL), "/")
 	if base == "" {
-		return nil, fmt.Errorf("gitea url is required (--gitea-url)")
+		return nil, fmt.Errorf("forge url is required (--forge-url)")
 	}
 	u, err := url.Parse(base)
 	if err != nil {
-		return nil, fmt.Errorf("gitea url %q: %w", base, err)
+		return nil, fmt.Errorf("forge url %q: %w", base, err)
 	}
 	if u.Scheme != "http" && u.Scheme != "https" {
-		return nil, fmt.Errorf("gitea url %q: scheme must be http or https", base)
+		return nil, fmt.Errorf("forge url %q: scheme must be http or https", base)
 	}
 	if u.Host == "" {
-		return nil, fmt.Errorf("gitea url %q: missing host", base)
+		return nil, fmt.Errorf("forge url %q: missing host", base)
 	}
 	if strings.TrimSpace(o.Owner) == "" {
-		return nil, fmt.Errorf("gitea owner is required (--gitea-owner)")
+		return nil, fmt.Errorf("forge owner is required (--forge-owner)")
 	}
 	if strings.TrimSpace(o.Repo) == "" {
-		return nil, fmt.Errorf("gitea repo is required (--gitea-repo)")
+		return nil, fmt.Errorf("forge repo is required (--forge-repo)")
 	}
 
 	ref := strings.TrimSpace(o.Ref)
@@ -87,7 +87,7 @@ func NewGitea(o GiteaOptions) (*Gitea, error) {
 		path = "nav.yaml"
 	}
 	if !SafeRelativePath(path) {
-		return nil, fmt.Errorf("gitea path %q must be a relative path inside the repository", o.Path)
+		return nil, fmt.Errorf("forge path %q must be a relative path inside the repository", o.Path)
 	}
 	timeout := o.Timeout
 	if timeout <= 0 {
@@ -136,7 +136,7 @@ func (g *Gitea) Fetch(ctx context.Context) (Snapshot, error) {
 // style.customCss.
 func (g *Gitea) FetchPath(ctx context.Context, path string) (Snapshot, error) {
 	if !SafeRelativePath(path) {
-		return Snapshot{}, fmt.Errorf("gitea: %q is not a path inside the repository", path)
+		return Snapshot{}, fmt.Errorf("%s: %q is not a path inside the repository", g.kind, path)
 	}
 	return g.fetchPath(ctx, path)
 }
@@ -156,7 +156,7 @@ func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return Snapshot{}, fmt.Errorf("gitea request failed: %w", err)
+		return Snapshot{}, fmt.Errorf("%s request failed: %w", g.kind, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -166,7 +166,7 @@ func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 
 	var cr contentsResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&cr); err != nil {
-		return Snapshot{}, fmt.Errorf("gitea returned an unexpected body: %w", err)
+		return Snapshot{}, fmt.Errorf("%s returned an unexpected body: %w", g.kind, err)
 	}
 
 	data, err := decodeContent(&cr)
@@ -194,15 +194,15 @@ func (g *Gitea) checkStatus(resp *http.Response, endpoint string) error {
 	case http.StatusOK:
 		return nil
 	case http.StatusNotFound:
-		return fmt.Errorf("gitea 404: %s not found in %s/%s at ref %q (check the path, the ref, and the token's repository scope)",
-			g.path, g.owner, g.repo, g.ref)
+		return fmt.Errorf("%s 404: %s not found in %s/%s at ref %q (check the path, the ref, and the token's repository scope)",
+			g.kind, g.path, g.owner, g.repo, g.ref)
 	case http.StatusUnauthorized:
-		return fmt.Errorf("gitea 401: the access token was rejected (is it expired or revoked?)")
+		return fmt.Errorf("%s 401: the access token was rejected (is it expired or revoked?)", g.kind)
 	case http.StatusForbidden:
-		return fmt.Errorf("gitea 403: the access token cannot read %s/%s (grant it repo read scope)", g.owner, g.repo)
+		return fmt.Errorf("%s 403: the access token cannot read %s/%s (grant it repo read scope)", g.kind, g.owner, g.repo)
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 256))
-		return fmt.Errorf("gitea %s: unexpected HTTP %d: %s", endpoint, resp.StatusCode, bytes.TrimSpace(body))
+		return fmt.Errorf("%s %s: unexpected HTTP %d: %s", g.kind, endpoint, resp.StatusCode, bytes.TrimSpace(body))
 	}
 }
 
@@ -219,7 +219,7 @@ func (g *Gitea) fetchRaw(ctx context.Context, path string) ([]byte, error) {
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("gitea raw request failed: %w", err)
+		return nil, fmt.Errorf("%s raw request failed: %w", g.kind, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -228,7 +228,7 @@ func (g *Gitea) fetchRaw(ctx context.Context, path string) ([]byte, error) {
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 8<<20))
 	if err != nil {
-		return nil, fmt.Errorf("gitea raw read failed: %w", err)
+		return nil, fmt.Errorf("%s raw read failed: %w", g.kind, err)
 	}
 	return data, nil
 }
@@ -247,7 +247,7 @@ func decodeContent(cr *contentsResponse) ([]byte, error) {
 		}, cr.Content)
 		data, err := base64.StdEncoding.DecodeString(cleaned)
 		if err != nil {
-			return nil, fmt.Errorf("gitea returned undecodable base64 content: %w", err)
+			return nil, fmt.Errorf("the API returned undecodable base64 content: %w", err)
 		}
 		return data, nil
 	}
