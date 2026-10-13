@@ -76,6 +76,17 @@ function send(method, params = {}) {
   });
 }
 
+async function evaluateAsync(expression) {
+  const res = await send('Runtime.evaluate', {
+    expression, returnByValue: true, awaitPromise: true,
+  });
+  if (res.exceptionDetails) {
+    const d = res.exceptionDetails;
+    throw new Error((d.exception && d.exception.description) || d.text);
+  }
+  return res.result.value;
+}
+
 async function evaluate(expression) {
   const res = await send('Runtime.evaluate', { expression, returnByValue: true });
   if (res.exceptionDetails) {
@@ -180,7 +191,14 @@ try {
   check('a theme is applied', ['light', 'dark'].includes(shape.theme), shape.theme);
   check('the stylesheet is revision pinned', /\?v=/.test(shape.themeHref || ''), shape.themeHref);
   check('design tokens resolved', !!shape.accent && !!shape.radius, `${shape.accent} / ${shape.radius}`);
-  check('the page title came from the config', !!shape.title && shape.title !== '导航', shape.title);
+  const titles = await evaluateAsync(`(async () => {
+    const res = await fetch('api/nav', { cache: 'no-store' });
+    const cfg = await res.json();
+    return { configured: cfg.site.title, rendered: document.title };
+  })()`);
+  check('the page title came from the config',
+    !!titles.configured && titles.rendered === titles.configured,
+    `document.title=${JSON.stringify(titles.rendered)} config=${JSON.stringify(titles.configured)}`);
 
   /* ---------- pinned entries must not be duplicated ---------- */
 
