@@ -2,14 +2,14 @@
 
 配置托管在 git 里的导航页。**改 `nav.yaml` → `git push` → 页面自己变**，不用重新部署、不用重新构建。
 
-- **配置就是 git 仓库里的一个 YAML 文件**，历史、diff、review、回滚全部白送。
-- **改样式也不用重新编译**：颜色、圆角、字号、密度是 `nav.yaml` 里的令牌，想大改就放一个 `custom.css` 进仓库——两者都走同一条 push 即生效的链路。真要动 DOM 结构，`--dump-web` 导出前端再 `--web-dir` 指过去。
+- **配置就是 git 仓库里的一个 YAML 文件**——历史、diff、review、回滚全部白送。
+- **改样式也不用重新编译**：颜色、圆角、字号、密度都是仓库里的数据，push 即生效。
 - **三套布局**：`grid` 精致卡片 / `dashboard` 紧凑密集 / `list` 单列。
-- **私有仓可用**：Gitea 的 token 只存在服务端，浏览器拿不到。
-- **图标由服务端解析并缓存**（解析 `<link rel="icon">`），所以哈希命名的图标、没有 `favicon.ico` 的内网站点、以及不联网的浏览器都能显示图标。
-- **可选的服务状态灯**（默认关闭，关着时零探测流量）：绿/红点 + 右上角"2/3 在线"，点它只看异常。
+- **私有仓可用**：token 只存在服务端，浏览器拿不到。
+- **图标由服务端解析并缓存**：哈希命名的图标、没有 `favicon.ico` 的内网站点都能显示。
+- **可选的服务状态灯**，默认关闭，关着时零探测流量。
 - **单二进制，零运行时依赖**：静态编译的 Go，空载内存 13 MB。
-- **推错配置不会把页面搞挂**：结构性问题整份拒绝，继续服务上一版好配置；外观性问题只记 warning 并在页面上提示。
+- **推错配置不会把页面搞挂**：结构性问题整份拒绝，继续服务上一版；外观性问题只记 warning。
 
 ---
 
@@ -284,87 +284,12 @@ docker exec ghome /ghome --healthcheck       # 容器里查自己
 （`-v ./web:/srv/web:ro -e GHOME_WEB_DIR=/srv/web`），注意容器里的进程是 uid
 `65534`，宿主目录得给它读权限。
 
-#### 构建时的 WARNING
+#### 构建时的那条 WARNING
 
-如果你构建时看到这条，它无害——构建会成功，镜像也能用：
-
-```text
-WARNING: current commit information was not captured by the build: failed to read
-current commit information with git rev-parse --is-inside-work-tree
-```
-
-但它有几个容易搞错的点，我第一版就写错了两处，所以值得讲清楚。
-
-它**不是** `.dockerignore` 引起的。buildx 在 `build/git.go` 里判断的是：
-
-```go
-if !gitc.IsInsideWorkTree(ctx) {
-    if st, err := os.Stat(path.Join(wd, ".git")); err == nil && st.IsDir() {
-        return nil, errors.New("failed to read current commit information with git rev-parse --is-inside-work-tree")
-    }
-    return nil, nil      // 没有 .git 就静默跳过，不报警
-}
-```
-
-`wd` 是**宿主上你传给 `docker build` 的那个上下文目录**，`os.Stat` 跑在宿主上。
-`.dockerignore` 只影响送进 builder 的内容，管不到这个判断。
-
-所以触发条件是：**`.git` 在，但 git 在那个目录里拒绝把它认作工作树**。
-这是个 git 问题，不是 Docker 问题。
-
-**最常见的成因：git clone 用普通用户，构建用 root。**
-
-```console
-$ git clone https://github.com/vrocwang/ghome.git   # 文件属于普通用户
-$ sudo docker build -t ghome .                       # 进程是 root
-```
-
-仓库属主和构建用户不一致，git 的 dubious ownership 检查（CVE-2022-24765 的
-缓解措施）就会拒绝，于是 buildx 打那条警告。三个选择，按推荐顺序：
-
-**1. 别用 root 构建**（真正的修法，根因是混用了两个用户）
-
-```bash
-# Linux：把你自己加进 docker 组，然后重新登录
-sudo usermod -aG docker "$USER"
-
-# macOS + Docker Desktop：本来就不需要 sudo，去掉它即可
-docker build -t ghome .
-```
-
-**2. 告诉 root 的 git 这个目录是安全的**（workaround，顺带把 git 元数据也补上）
-
-```bash
-sudo git config --global --add safe.directory "$PWD"
-```
-
-注意这是写进 **root 的** `~/.gitconfig`，因为跑 git 的是 root。
-
-先在上下文目录里自己复现一次，能直接看到真实原因：
-
-```bash
-git rev-parse --is-inside-work-tree
-git status        # 上一条失败时，这条会说清为什么
-# → fatal: detected dubious ownership in repository at '...'
-```
-
-**3. 让 buildx 干脆别查**（版本号不受影响，见下）
-
-`build/git.go` 开头有 `if !setGitLabels && !setGitInfo { return nil, nil }`，
-而 `setGitInfo` 默认 `true`，用 `BUILDX_GIT_INFO=false` 即可跳过整趟查询。
-`make docker` 已经这么设了——变量是在 Makefile 的 recipe 里设的，所以
-`sudo make docker` 也照样生效：
-
-```bash
-make docker          # 或 sudo make docker
-```
-
-之所以设它不心虚：版本号和 revision 是 Dockerfile 用 `--build-arg` 显式传进去的，
-buildx 那套自动推断对这个项目本来就是多余的。
-
-顺带说一下版本号：Dockerfile 用 `--build-arg VERSION` 显式注入 `-ldflags
-"-X main.version=..."`，所以镜像里 `ghome --version` 和 `/healthz` 的 `version`
-字段报的是真实版本，不是 `dev`。不传的话就是 `dev`。
+如果构建输出里有 `WARNING: current commit information was not captured by the
+build`，可以忽略：构建会成功，镜像也能用。它最常见的成因是**用普通用户 clone、
+用 root 构建**（git 的 dubious ownership 检查），三种解法见
+[`docs/docker-build-warning.md`](docs/docker-build-warning.md)。
 
 #### 多架构
 
@@ -431,44 +356,11 @@ healthcheck:
 
 #### 加了密码（auth_basic）之后
 
-**UI 和实时更新不受影响，但 webhook 会被打断。** 拿真实反代实测过：
-
-| 链路 | 加了 Basic 之后 |
-| --- | --- |
-| 浏览器打开页面、`/api/nav`、`/theme.css`、图标 | ✓ 正常 |
-| **SSE 实时更新**（`/api/events`） | ✓ 正常，实测 1.5s 到达且页面未重载 |
-| **Gitea/Forgejo 的 webhook** | ✗ **401**，请求根本到不了 ghome |
-| Docker 的 `HEALTHCHECK` | ✓ 不受影响（它探的是容器内的 ghome，不经代理） |
-
-浏览器只会在整页加载时收到**一次**认证挑战，之后把凭据复用到所有后续请求上——
-包括 SSE 长连接和图标，所以 UI 侧不用管。
-
-webhook 是唯一的例外：**forge 不会输密码**。所以受保护的 `/api/webhook` 会把 401
-返回给 forge，秒级更新静默死掉，退化成轮询（页面照样更新，只是最多晚一分钟）。
-这个"静默"正是它危险的地方。
-
-**修法是豁免这一条路径**，而不是给它配密码：
-
-```nginx
-location = /api/webhook {
-    auth_basic off;
-    proxy_pass http://ghome;
-    # ...
-}
-```
-
-这么做不削弱安全性：**HMAC 密钥才是这个接口真正的鉴权**（没配
-`--webhook-secret` 时它直接返回 403 不工作），实测错误签名仍然被 ghome 拒成 401。
-想再加一层的话，用来源 IP 限制比用一个 forge 发不出的密码更合适。
-
-另外 `/api/refresh` 有个坑：nginx 的 Basic 和 ghome 的 admin token **都用
-`Authorization` 头**，一个头装不下两个值。走代理时改用 `X-Ghome-Token`：
-
-```bash
-curl -u user:pass -H "X-Ghome-Token: $GHOME_ADMIN_TOKEN" -X POST https://nav.example.com/api/refresh
-```
-
-（`Authorization: Bearer ...` 在直连时正常，经 Basic 代理时会被代理当成 Basic 凭据而失败。）
+UI 和实时更新不受影响，但 **webhook 会被 401 挡住、退化成轮询**（页面照样更新，
+只是最多晚一分钟——这正是它危险的地方）。修法是给 `/api/webhook` 加
+`auth_basic off;`，HMAC 才是那个接口真正的鉴权。完整的实测数据、配置片段，以及
+`/api/refresh` 与 Basic 抢 `Authorization` 头的处理，见
+[`docs/basic-auth.md`](docs/basic-auth.md)。
 
 ### 交叉编译
 
@@ -757,7 +649,7 @@ status:
    ghome --icon-dir=/var/lib/ghome/icons
    ```
 
-   ```
+   ```text
    /var/lib/ghome/icons/
    ├── git.internal.svg      # 给 https://git.internal/
    ├── nas.png               # 给 http://nas:8080/ 和 http://nas:9090/
@@ -945,16 +837,11 @@ status:
 
 **`--icon-dir` 拼错为什么只警告、不拒绝启动，而 `--web-dir` 拼错会拒绝？** 因为两者的失败代价不同。`--web-dir` 是界面本身，路径错了页面直接不可用，所以必须在启动时就挡住。`--icon-dir` 只影响图标好不好看——页面还能正常用，因为一个图标目录拼错就把整个导航页拒绝掉是本末倒置。但**保持沉默更糟**：那种失败没有任何症状，你只会纳闷"为什么我的图标不对"。所以启动时明确报出它能做什么：可用图标数量，或者一条说清后果的警告。
 
-**为什么有两个 revision？** 因为配置和样式是两次独立的读。只改 `custom.css` 时配置的 blob SHA 不动，用一个 revision 兼做"要不要重拉样式表"的依据就会漏掉这种推送——页面会一直显示旧样式，而且只在"有人手动刷新"时才恢复，属于最难发现的那类 bug。拆成两个之后，`revision` 保持"配置内容"的准确语义（`/healthz` 里报的就是它），`themeRevision` 专门负责样式刷新决策，覆盖两份文件。这个坑是在把 Gitea 路径单独跑通时才暴露出来的：本地文件模式下同时改两个文件很自然，掩盖了它。
-
-**为什么未知字段只警告不报错？** 我一开始是硬失败的，理由是"拼错的字段会静默不生效"。但真实代价是：改一个可选字段打错一个字，整页配置作废、页面停更——这个惩罚和错误严重程度不成比例。现在的分界是：**会让页面撒谎的问题硬失败，只是某一项没生效的问题警告**。两种情况你都看得见。
-
 **关于安全：**
 - token 只存在服务端内存/环境变量里，不进 URL、不进日志、不进响应。
-- 响应带严格 CSP。**favicon 走服务端代理**，所以那条路径上浏览器不访问第三方；但配置里显式写的 `icon:` / `logo:` 图片 URL 是浏览器直连的，所以 `img-src` 是 `'self' data: http: https:`（`http:` 是给纯 HTTP 的内网部署留的）。
-- `/api/icon` 只服务配置里出现过的 host，不是开放代理；图标响应额外带 `sandbox` CSP，防止第三方 SVG 直接被执行。
+- 响应带严格 CSP，`/api/icon` 还额外带 `sandbox`——两者的细节见[图标是怎么来的](#图标是怎么来的)。
 - `style` 令牌和 `custom.css` 的路径都经过白名单校验（颜色只收 `#hex`/`rgb()`/`hsl()`/关键字，路径不许 `..`、不许绝对路径、必须 `.css` 结尾），因为它们的值会进 CSS、路径会进文件系统。
-- `url` 走危险协议黑名单而不是白名单，既挡住了 `javascript:` 这类，又不限制 `ssh://`/`vscode://` 这些真实用途。
+- `url` 走危险协议黑名单，既挡住 `javascript:` 这类，又不限制 `ssh://`/`vscode://` 这些真实用途——见 [URL 规则](#url-规则)。
 - `/api/webhook` 没配密钥就禁用；`/api/refresh` 没配 token 就禁用。默认不暴露任何写接口。
 - 签名比较用 `hmac.Equal` / `subtle.ConstantTimeCompare`，不是 `==`。
 - 访问日志不记查询串，因为 `/api/icon` 的 query 里可能有链接自带的 token。
