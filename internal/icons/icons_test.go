@@ -1023,3 +1023,65 @@ func TestDefaults(t *testing.T) {
 		t.Error("UserAgent default is empty")
 	}
 }
+
+func TestLocalIconsCountsOnlyUsableFiles(t *testing.T) {
+	dir := t.TempDir()
+	write := func(name string, data []byte) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(dir, name), data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	write("a.example.svg", []byte("<svg/>"))
+	write("b.example.png", []byte("x"))
+	write("c.example.ico", []byte("x"))
+	write("notes.txt", []byte("ignored: wrong extension"))
+	write("d.example", []byte("ignored: no extension"))
+	if err := os.MkdirAll(filepath.Join(dir, "sub.example.png"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := LocalIcons(dir)
+	if err != nil {
+		t.Fatalf("LocalIcons() error = %v", err)
+	}
+	if got != 3 {
+		t.Errorf("LocalIcons() = %d, want 3 (only the three usable icon files)", got)
+	}
+}
+
+// The count is what tells an operator that a typo'd --icon-dir is doing
+// nothing, so it has to be able to report "this path is wrong".
+func TestLocalIconsReportsBadPaths(t *testing.T) {
+	if n, err := LocalIcons(""); err != nil || n != 0 {
+		t.Errorf("LocalIcons(\"\") = %d, %v; want 0, nil", n, err)
+	}
+	if _, err := LocalIcons(filepath.Join(t.TempDir(), "missing")); err == nil {
+		t.Error("LocalIcons() accepted a missing directory")
+	}
+
+	file := filepath.Join(t.TempDir(), "not-a-dir")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LocalIcons(file); err == nil {
+		t.Error("LocalIcons() accepted a regular file")
+	}
+}
+
+func TestLocalIconsRejectsTraversalNames(t *testing.T) {
+	dir := t.TempDir()
+	// A file whose "host" part contains a traversal must not be counted, since
+	// the resolver would never look it up that way.
+	if err := os.WriteFile(filepath.Join(dir, "..evil.svg"), []byte("<svg/>"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := LocalIcons(dir)
+	if err != nil {
+		t.Fatalf("LocalIcons() error = %v", err)
+	}
+	if got != 0 {
+		t.Errorf("LocalIcons() = %d, want 0", got)
+	}
+}

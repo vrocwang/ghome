@@ -254,7 +254,22 @@ git commit -am "改个标题" && git push
 
 页面不再让浏览器直接去第三方站点取 `favicon.ico`，而是走 **`/api/icon?h=<host>`**，由服务端解析和缓存：
 
-1. 本地图标目录（`--icon-dir`，文件名是 `<host>.png` 之类）优先，命中就不联网。
+1. **本地图标目录**（`--icon-dir`）优先，命中就完全不联网——也不查缓存。文件名是 `<host>` 加扩展名，扩展名按 `.svg` → `.png` → `.ico` → `.webp` → `.jpg` → `.jpeg` 的顺序找，第一个存在的生效。host 取链接 URL 的主机名，**已转小写并剥掉端口**，所以 `http://nas:8080` 和 `http://nas:9090` 都找 `nas.svg`。
+
+   ```bash
+   ghome --icon-dir=/var/lib/ghome/icons
+   ```
+
+   ```
+   /var/lib/ghome/icons/
+   ├── git.internal.svg      # 给 https://git.internal/
+   ├── nas.png               # 给 http://nas:8080/ 和 http://nas:9090/
+   └── grafana.internal.svg
+   ```
+
+   这一条是内网服务的**可靠解**：它们大多没有 favicon，DNS 也可能根本解析不了，而本地文件不需要网络也不需要 DNS。实测对解析不了的 host 响应耗时 0.4ms（走文件系统），而联网解析会超时。文件超过 512KB 会被忽略（然后照常回退到联网解析）。
+
+   解析顺序里它排在**缓存之前**，所以放进一个文件立刻生效，不用等缓存过期；反过来，删掉一个文件也会立刻回退到联网结果。
 2. 否则抓页面 HTML，解析 `<link rel="icon">`（含 `shortcut icon` / `apple-touch-icon` / `mask-icon`），会跟随 `<base href>` 解析相对路径；有多个就取 `sizes` 最大的。
 3. 没有 `<link>` 就退到 `<host>/favicon.ico`。
 4. 校验返回的确实是图片（看 `Content-Type`，可疑时用前 512 字节嗅探），否则算失败。
@@ -474,7 +489,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `--base-path` | `GHOME_BASE_PATH` | | 挂到子路径，例如 `/nav` |
 | `--cache-file` | `GHOME_CACHE_FILE` | | 把最后一次好配置落盘，git 挂了也能重启 |
 | `--web-dir` | `GHOME_WEB_DIR` | | 从磁盘读前端，缺的文件回退内嵌 |
-| `--icon-dir` | `GHOME_ICON_DIR` | | 本地图标目录，`<host>.png` 优先于联网解析 |
+| `--icon-dir` | `GHOME_ICON_DIR` | | 本地图标目录，文件名为 `<host>.svg`/`.png`/`.ico`/`.webp`/`.jpg`；优先于联网解析 |
 | `--dump-web` | | | 把内嵌前端导出到指定目录然后退出 |
 | `--log-level` | `GHOME_LOG_LEVEL` | `info` | `debug` / `info` / `warn` / `error` |
 | `--version` | | | 打印版本 |
@@ -543,6 +558,8 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | 改了颜色但页面没变 | 浏览器缓存了 `theme.css` | 页面会在配置版本变化时自动带新版本号重拉；硬刷一次也能解决 |
 | 想改样式又不想装 Go | 不需要装 | 用 `style:` 令牌或 `custom.css`；要动结构才用 `--dump-web` + `--web-dir` |
 | 图标都是字母头像 | 该站点没有可解析的图标，或服务端取不到 | 用 `icon:` 显式指定，或把图标放进 `--icon-dir` |
+| 放了本地图标却不生效 | 文件名不对（必须是 `<host>` 加扩展名，host 不含端口），或路径拼错 | 启动日志会报 `local icon directory ready, icons=N`；`N=0` 或出现 `--icon-dir is unusable` 就说明没生效 |
+| 本地图标和联网结果冲突 | 本地文件优先，且排在缓存之前 | 这是有意的：放进文件立刻生效，删掉立刻回退 |
 | 内网服务图标是同一个 | 图标按 host 缓存，同机不同端口会共用 | 用 `icon:` 分别指定 |
 | 状态点一直是灰色 | 探测未开启，或该链接不可探测（非 http/https） | 确认 `status.enabled` 和该链接的 `probe` |
 | 服务返回 401 但显示绿点 | 有意为之：401 说明服务活着 | 想改成红灯的话提 issue，不建议 |
@@ -564,6 +581,8 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 **为什么 webhook 之外还留轮询？** webhook 是"尽力而为"的：Gitea 重启期间、网络抖动、密钥改错、钩子被人误删——任何一种都会让更新静默停掉，而**静默停掉是最难发现的故障**。60 秒轮询是那份保险。
 
 **为什么坏配置不覆盖好配置？** 导航页是入口，挂掉影响所有人。宁可让一个人看到自己的改动没生效（`/healthz` 里明写着原因），也不能让所有人打开是一片错误页。
+
+**`--icon-dir` 拼错为什么只警告、不拒绝启动，而 `--web-dir` 拼错会拒绝？** 因为两者的失败代价不同。`--web-dir` 是界面本身，路径错了页面直接不可用，所以必须在启动时就挡住。`--icon-dir` 只影响图标好不好看——页面还能正常用，因为一个图标目录拼错就把整个导航页拒绝掉是本末倒置。但**保持沉默更糟**：那种失败没有任何症状，你只会纳闷"为什么我的图标不对"。所以启动时明确报出它能做什么：可用图标数量，或者一条说清后果的警告。
 
 **为什么有两个 revision？** 因为配置和样式是两次独立的读。只改 `custom.css` 时配置的 blob SHA 不动，用一个 revision 兼做"要不要重拉样式表"的依据就会漏掉这种推送——页面会一直显示旧样式，而且只在"有人手动刷新"时才恢复，属于最难发现的那类 bug。拆成两个之后，`revision` 保持"配置内容"的准确语义（`/healthz` 里报的就是它），`themeRevision` 专门负责样式刷新决策，覆盖两份文件。这个坑是在把 Gitea 路径单独跑通时才暴露出来的：本地文件模式下同时改两个文件很自然，掩盖了它。
 

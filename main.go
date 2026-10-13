@@ -93,6 +93,7 @@ func run() error {
 	st := store.New()
 	loadCache(o.cacheFile, st, log)
 
+	reportIconDir(o.iconDir, log)
 	iconCache := icons.New(icons.Options{Dir: o.iconDir, Logger: log})
 	probes := newProber(ctx, st, log)
 
@@ -377,6 +378,29 @@ which keeps tokens out of the process list.
 	// ExitOnError already handles the error; parsing cannot fail here.
 	_ = fs.Parse(os.Args[1:])
 	return o
+}
+
+// reportIconDir says out loud what --icon-dir is actually going to do.
+//
+// A bad value is a warning rather than a startup failure, unlike --web-dir:
+// icons are decoration, and taking the navigation page down over a missing
+// icon directory would be the wrong trade. But staying silent is worse still,
+// because a typo here fails in a way nobody notices.
+func reportIconDir(dir string, log *slog.Logger) {
+	if dir == "" {
+		return
+	}
+	count, err := icons.LocalIcons(dir)
+	switch {
+	case err != nil:
+		log.Warn("--icon-dir is unusable, so local icons are disabled and every icon will be fetched over the network",
+			"dir", dir, "error", err)
+	case count == 0:
+		log.Warn("--icon-dir contains no usable icon files, so it has no effect; expected names like <host>.svg or <host>.png",
+			"dir", dir)
+	default:
+		log.Info("local icon directory ready", "dir", dir, "icons", count)
+	}
 }
 
 func buildSource(o options) (source.Source, error) {

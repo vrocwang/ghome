@@ -772,3 +772,46 @@ func newClient(timeout time.Duration) *http.Client {
 		},
 	}
 }
+
+// LocalIcons reports how many files in dir are ones this resolver would
+// actually use.
+//
+// It exists so startup can tell "the flag was passed" apart from "the flag is
+// doing something". Those differ by exactly one typo, and a typo'd --icon-dir
+// is otherwise invisible: every lookup simply falls through to the network.
+func LocalIcons(dir string) (int, error) {
+	if dir == "" {
+		return 0, nil
+	}
+	info, err := os.Stat(dir)
+	if err != nil {
+		return 0, err
+	}
+	if !info.IsDir() {
+		return 0, fmt.Errorf("icons: %s is not a directory", dir)
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return 0, err
+	}
+
+	suffixes := make(map[string]bool, len(localExts))
+	for _, ext := range localExts {
+		suffixes[ext] = true
+	}
+	count := 0
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(entry.Name()))
+		if !suffixes[ext] {
+			continue
+		}
+		host := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
+		if safeHostName(strings.ToLower(host)) {
+			count++
+		}
+	}
+	return count, nil
+}

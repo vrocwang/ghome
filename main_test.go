@@ -1,11 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -229,3 +232,49 @@ func waitFor(t *testing.T, timeout time.Duration, what string, cond func() bool)
 }
 
 const minimalNav = "groups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n"
+
+/* ---------- --icon-dir startup diagnostics ---------- */
+
+// A typo'd --icon-dir used to fail in complete silence: every lookup just fell
+// through to the network, so the only symptom was "why are my icons wrong".
+func TestReportIconDirSaysWhatWillHappen(t *testing.T) {
+	capture := func(dir string) string {
+		t.Helper()
+		var buf bytes.Buffer
+		reportIconDir(dir, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		return buf.String()
+	}
+
+	t.Run("unset says nothing", func(t *testing.T) {
+		if got := capture(""); got != "" {
+			t.Errorf("reportIconDir(\"\") logged %q, want silence", got)
+		}
+	})
+
+	t.Run("missing directory warns", func(t *testing.T) {
+		got := capture(filepath.Join(t.TempDir(), "nope"))
+		if !strings.Contains(got, "WARN") || !strings.Contains(got, "unusable") {
+			t.Errorf("reportIconDir() logged %q, want a warning about an unusable path", got)
+		}
+	})
+
+	t.Run("empty directory warns that it has no effect", func(t *testing.T) {
+		got := capture(t.TempDir())
+		if !strings.Contains(got, "WARN") || !strings.Contains(got, "no usable icon files") {
+			t.Errorf("reportIconDir() logged %q, want a warning about an empty directory", got)
+		}
+	})
+
+	t.Run("a working directory reports its count", func(t *testing.T) {
+		dir := t.TempDir()
+		for _, name := range []string{"a.test.svg", "b.test.png"} {
+			if err := os.WriteFile(filepath.Join(dir, name), []byte("<svg/>"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		got := capture(dir)
+		if !strings.Contains(got, "ready") || !strings.Contains(got, "icons=2") {
+			t.Errorf("reportIconDir() logged %q, want the icon count", got)
+		}
+	})
+}
