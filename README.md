@@ -533,6 +533,54 @@ docker buildx build --platform linux/amd64,linux/arm64 -t ghome --push .
 **不用 Docker 也行。** `make cross` 产出的就是同一个静态二进制，`scp` 上服务器
 直接跑，连容器运行时都省了——这是这个项目在低配机器上的默认姿势。
 
+#### 这些参数在 Docker 里怎么给
+
+这是个容易卡住的地方：21 个 flag 在容器里**分三类**，给法不一样。
+
+| 类型 | 有哪些 | 怎么给 |
+| --- | --- | --- |
+| **设置** | 18 个：`--listen` `--source` `--file` `--forge-*`（6 个）`--poll` `--webhook-secret` `--branch` `--admin-token` `--base-path` `--cache-file` `--web-dir` `--icon-dir` `--log-level` | 环境变量，写进 `ghome.env`，compose 用 `env_file` 引入 |
+| **需要宿主目录** | `--web-dir`、`--icon-dir` | 环境变量 **+ 只读卷**，两半必须指向同一个容器内路径 |
+| **一次性动作** | `--dump-web`、`--healthcheck`、`--version` | 直接当命令参数——它们是动作不是配置，所以**没有环境变量** |
+
+完整对照见上面的[命令行与环境变量](#命令行与环境变量)表；`deploy/ghome.env.example`
+里每一项都写好了，包括被注释掉的可选项。
+
+**需要挂目录的两个**，两半必须成对：
+
+```yaml
+environment:
+  GHOME_ICON_DIR: /srv/icons
+volumes:
+  - ./icons:/srv/icons:ro
+```
+
+容器里的进程是 uid **65534**，所以宿主目录得给它读权限（一般 0755 就行）。
+`--icon-dir` 用不了时启动会打一条明确的 WARNING，不会静默失效。
+
+**`--dump-web` 是一条命令，不是配置**：
+
+```bash
+docker run --rm -u "$(id -u):$(id -g)" \
+  -v "$PWD/web:/out" ghome --dump-web=/out
+```
+
+`-u` 是关键：镜像默认 uid 65534，而 bind mount 属于你，不换 uid 会直接
+`permission denied`（实测的报错就是 `mkdir /out/assets: permission denied`）。
+`ghome` 里的 `--web-dir` 是**逐文件回退**的，所以导出后只需要改你想改的那个文件，
+删掉的文件继续跟着二进制走。
+
+**`--healthcheck` 由镜像的 HEALTHCHECK 自己调用**，正常情况下你不用管。要在
+compose 里覆盖，注意它**不继承 CMD 参数、只读环境变量**（上面那个坑二）：
+
+```yaml
+healthcheck:
+  test: ["CMD", "/ghome", "--healthcheck"]
+```
+
+**不用 Docker 也行。** `make cross` 产出的就是同一个静态二进制，`scp` 上服务器
+直接跑，连容器运行时都省了——这是这个项目在低配机器上的默认姿势。
+
 ### nginx 反代
 
 见 [`deploy/nginx.conf.example`](deploy/nginx.conf.example)。**最关键的两行是 `proxy_buffering off;` 和 `proxy_read_timeout 1h;`**——不关缓冲，SSE 会成块到达，实时更新看起来就像坏了。

@@ -5,10 +5,13 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -364,4 +367,57 @@ func TestRunHealthcheck(t *testing.T) {
 			t.Errorf("probed %q, want /nav/healthz", got)
 		}
 	})
+}
+
+/* ---------- 配置面与文档的一致性 ---------- */
+
+// deploy/ghome.env.example is the only place an operator sees the whole
+// configuration surface at once, and it has silently drifted before: the token
+// assignment went missing while its explanatory comment stayed behind, which
+// reads as complete at a glance.
+//
+// So the check is for an *assignment*, not a mention. The first version of this
+// test looked for the name anywhere and happily passed on exactly that bug.
+func TestEnvExampleMatchesTheConfigurationSurface(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	example, err := os.ReadFile("deploy/ghome.env.example")
+	if err != nil {
+		t.Fatalf("read deploy/ghome.env.example: %v", err)
+	}
+
+	declared := map[string]bool{}
+	for _, m := range regexp.MustCompile(`"(GHOME_[A-Z_]+)"`).FindAllStringSubmatch(string(src), -1) {
+		declared[m[1]] = true
+	}
+
+	// `# NAME=value` counts: that is how optional settings are shown. A line
+	// that merely names the variable does not.
+	assigned := map[string]bool{}
+	for _, m := range regexp.MustCompile(`(?m)^#?\s*(GHOME_[A-Z_]+)\s*=`).FindAllStringSubmatch(string(example), -1) {
+		assigned[m[1]] = true
+	}
+
+	// Without these, a broken pattern would make the test pass forever.
+	if len(declared) < 15 {
+		t.Fatalf("found only %d GHOME_* variables in main.go; the pattern is wrong", len(declared))
+	}
+	if len(assigned) < 15 {
+		t.Fatalf("found only %d assignments in the env example; the pattern is wrong", len(assigned))
+	}
+
+	// Every variable the program reads must be shown being set.
+	for _, name := range slices.Sorted(maps.Keys(declared)) {
+		if !assigned[name] {
+			t.Errorf("deploy/ghome.env.example documents %s but never assigns it", name)
+		}
+	}
+	// And nothing stale may survive a rename.
+	for _, name := range slices.Sorted(maps.Keys(assigned)) {
+		if !declared[name] {
+			t.Errorf("deploy/ghome.env.example sets %s, which nothing reads", name)
+		}
+	}
 }

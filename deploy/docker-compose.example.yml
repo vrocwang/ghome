@@ -3,9 +3,15 @@
 #   cp deploy/ghome.env.example deploy/ghome.env    # fill in the forge settings
 #   docker compose -f deploy/docker-compose.example.yml up -d --build
 #
-# The image's own HEALTHCHECK is inherited, so `docker compose ps` reports the
-# real state instead of just "running", and `depends_on: condition:
-# service_healthy` works for whatever sits in front of it.
+# Where things go:
+#
+#   * Every *setting* lives in ghome.env, which this file reads as env_file.
+#     That is the complete configuration surface -- there are 18 variables and
+#     the example file documents all of them.
+#   * Anything that needs a host directory needs a volume here as well, and the
+#     two halves have to agree on the path *inside* the container.
+#   * One-shot actions (--dump-web, --healthcheck) are not settings and have no
+#     variable: run them as arguments. See the README's Docker section.
 
 services:
   ghome:
@@ -14,35 +20,51 @@ services:
       context: ..
     # Or pin a built image instead of building here:
     # image: registry.example.com/simon/ghome:latest
+
     container_name: ghome
     restart: unless-stopped
 
     env_file:
       - ./ghome.env
+
     environment:
+      # Only paths that are about *this container* belong here; everything else
+      # comes from ghome.env. These uncomment together with their volume below.
       GHOME_CACHE_FILE: /data/cache.yaml
+      # GHOME_WEB_DIR: /srv/web
+      # GHOME_ICON_DIR: /srv/icons
 
     volumes:
-      # Keeps the last good config across restarts, so a restart while the
-      # forge is unreachable still serves the page. A fresh named volume
-      # inherits /data's ownership from the image, so the unprivileged user can
-      # write to it without any chown on your side.
+      # Keeps the last good config across restarts, so a restart while the forge
+      # is unreachable still serves the page. A fresh named volume inherits
+      # /data's ownership from the image, so the unprivileged user can write to
+      # it without any chown on your side.
       - ghome-data:/data
 
-      # Optional: serve the UI from disk instead of the embedded copy.
-      # `ghome --dump-web=./web` writes a working starting point.
-      #   GHOME_WEB_DIR: /srv/web
+      # --- optional: serve the UI from disk --------------------------------
+      # Change the markup or the base stylesheet. Get a starting copy first:
+      #   docker run --rm -u "$(id -u):$(id -g)" \
+      #     -v "$PWD/web:/out" ghome --dump-web=/out
+      # The -u matters: the image runs as uid 65534 while the bind mount belongs
+      # to you, so without it the dump fails with "permission denied".
       # - ./web:/srv/web:ro
 
-      # Optional: local icons, tried before fetching a site. The reliable fix
-      # for internal services that have no favicon. Read access is enough.
-      #   GHOME_ICON_DIR: /srv/icons
+      # --- optional: local icons -------------------------------------------
+      # Files named <host>.svg / .png / .ico / .webp / .jpg, tried before
+      # fetching a site. The reliable fix for internal services that have no
+      # favicon. Read access is enough; ghome warns at startup if it cannot use
+      # the directory.
       # - ./icons:/srv/icons:ro
 
     ports:
-      # Keep it on loopback and put a reverse proxy in front; the webhook
-      # endpoint shares this port.
+      # Keep it on loopback and put a reverse proxy in front. The webhook
+      # endpoint shares this port, so it is reachable from outside only if this
+      # is.
       - "127.0.0.1:8080:8080"
+
+    # The image's own HEALTHCHECK is inherited, so `docker compose ps` reports
+    # the real state instead of just "running", and `depends_on: condition:
+    # service_healthy` works for whatever sits in front of it.
 
 volumes:
   ghome-data:
