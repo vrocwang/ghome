@@ -13,12 +13,18 @@ import (
 	"time"
 )
 
-// Gitea reads a single file out of a Gitea/Forgejo repository through the REST
-// API. It never shells out to git and never clones anything, which is what
+// Gitea reads a single file out of a Gitea or Forgejo repository through the
+// REST API. It never shells out to git and never clones anything, which is what
 // keeps the whole service cheap enough for a small VPS.
+//
+// The name is the API dialect, not the product: Forgejo is a Gitea fork and
+// serves the same /api/v1/repos/... shape, so one client covers both. Kind only
+// affects how the source describes itself, because an operator looking at
+// /healthz should see the product they actually run.
 //
 // The token stays on the server: the browser only ever talks to ghome.
 type Gitea struct {
+	kind   string
 	base   string
 	owner  string
 	repo   string
@@ -40,8 +46,11 @@ type GiteaOptions struct {
 	// Path is the file inside the repository. Defaults to nav.yaml.
 	Path string
 	// Token is a read-only access token for private repositories. Empty for
-	// public ones.
+	// public ones. Both Gitea and Forgejo accept it as "Authorization: token".
 	Token string
+	// Kind names the product for Describe(): "gitea" or "forgejo". Defaults to
+	// "gitea".
+	Kind string
 	// Timeout bounds a single API call. Defaults to 15s.
 	Timeout time.Duration
 }
@@ -84,8 +93,13 @@ func NewGitea(o GiteaOptions) (*Gitea, error) {
 	if timeout <= 0 {
 		timeout = 15 * time.Second
 	}
+	kind := strings.ToLower(strings.TrimSpace(o.Kind))
+	if kind == "" {
+		kind = "gitea"
+	}
 
 	return &Gitea{
+		kind:   kind,
 		base:   base,
 		owner:  strings.TrimSpace(o.Owner),
 		repo:   strings.TrimSpace(o.Repo),
@@ -101,7 +115,7 @@ func NewGitea(o GiteaOptions) (*Gitea, error) {
 func (g *Gitea) Ref() string { return g.ref }
 
 func (g *Gitea) Describe() string {
-	return fmt.Sprintf("gitea:%s/%s/%s@%s", g.owner, g.repo, g.path, g.ref)
+	return fmt.Sprintf("%s:%s/%s/%s@%s", g.kind, g.owner, g.repo, g.path, g.ref)
 }
 
 // contentsResponse is the subset of GET /contents/{path} we care about.

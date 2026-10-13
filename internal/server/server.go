@@ -56,6 +56,10 @@ type Options struct {
 	Icons IconSource
 	// Status reports probe results. Nil disables /api/status.
 	Status StatusSource
+	// Source describes where the config comes from, for /healthz. It is
+	// reported even when nothing has loaded yet, which is precisely when an
+	// operator needs to see what the process is pointed at.
+	Source string
 	// Branch is the ref a webhook must match, e.g. "main". Empty accepts any.
 	Branch string
 	// WebhookSecret enables POST /api/webhook. Empty leaves it disabled.
@@ -634,6 +638,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	state.HeapMB = round1(float64(mem.HeapAlloc) / (1 << 20))
 	state.SysMB = round1(float64(mem.Sys) / (1 << 20))
 
+	state.Source = s.opts.Source
 	if ok {
 		state.Source = payload.Meta.Source
 		state.Revision = payload.Meta.Revision

@@ -357,3 +357,29 @@ func TestNewGiteaRejectsAnEscapingPath(t *testing.T) {
 		t.Fatal("NewGitea() accepted a path that escapes the repository")
 	}
 }
+
+// An operator reading /healthz should see the product they actually run.
+func TestGiteaDescribeUsesTheConfiguredKind(t *testing.T) {
+	base := GiteaOptions{BaseURL: "https://git.example.com", Owner: "simon", Repo: "homepage"}
+
+	gitea, err := NewGitea(base)
+	if err != nil {
+		t.Fatalf("NewGitea() error = %v", err)
+	}
+	if got := gitea.Describe(); got != "gitea:simon/homepage/nav.yaml@main" {
+		t.Errorf("Describe() = %q, want the gitea default", got)
+	}
+
+	opts := base
+	opts.Kind = "forgejo"
+	forgejo, err := NewGitea(opts)
+	if err != nil {
+		t.Fatalf("NewGitea() error = %v", err)
+	}
+	if got := forgejo.Describe(); got != "forgejo:simon/homepage/nav.yaml@main" {
+		t.Errorf("Describe() = %q, want forgejo", got)
+	}
+	if forgejo.Ref() != "main" {
+		t.Errorf("Ref() = %q", forgejo.Ref())
+	}
+}

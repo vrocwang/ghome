@@ -18,7 +18,7 @@
 - [30 秒跑起来](#30-秒跑起来)
 - [三套布局](#三套布局)
 - [改样式不用重新编译](#改样式不用重新编译)
-- [接你的私有 Gitea](#接你的私有-gitea)
+- [接你的私有 Gitea / Forgejo](#接你的私有-gitea--forgejo)
 - [一次 push 是怎么走到浏览器的](#一次-push-是怎么走到浏览器的)
 - [图标是怎么来的](#图标是怎么来的)
 - [服务状态灯](#服务状态灯)
@@ -161,13 +161,13 @@ ghome --web-dir=/srv/ghome/web ...       # 指过去
 
 ---
 
-## 接你的私有 Gitea
+## 接你的私有 Gitea / Forgejo
 
 ### 1. 建一个配置仓和 token
 
 建议**单独建一个仓**（例如 `simon/nav`）只放导航配置和 `custom.css`，跟代码仓解耦，这样改导航的人不需要代码权限。
 
-然后建 token：**Gitea → 右上角头像 → 设置 → 应用 → 生成令牌**，权限只需要 **`repository: read`**（只读，泄露了也改不了东西）。
+然后建 token：**头像 → 设置 → 应用（Applications）→ 生成令牌**，权限只需要**只读的仓库权限**（`read:repository`；拿不准就勾 `repo`，ghome 只会读）。Gitea 和 Forgejo 的界面路径一样。
 
 > 为什么不用 `git clone`：一次 HTTP GET 就能拿到文件，不需要 git 二进制、不需要占磁盘的裸库，小机器上更省。
 
@@ -177,7 +177,7 @@ ghome --web-dir=/srv/ghome/web ...       # 指过去
 export GHOME_GITEA_TOKEN=你的token
 
 ./bin/ghome \
-  --source=gitea \
+  --source=forgejo \          # 用 Gitea 就写 gitea，两者走同一套代码
   --gitea-url=https://git.example.com \
   --gitea-owner=simon \
   --gitea-repo=nav \
@@ -189,17 +189,28 @@ export GHOME_GITEA_TOKEN=你的token
 
 ### 3. 配 webhook（"秒级"的来源）
 
-Gitea 仓库页 → **设置 → 网页钩子 → 添加网页钩子 → 选 Gitea**：
+仓库页 → **设置（Settings）→ Webhooks（网页钩子）→ 添加 Webhook**，类型按你跑的产品选：
+
+| | Gitea | Forgejo |
+| --- | --- | --- |
+| 类型选 | `Gitea` | `Forgejo` |
+| 界面路径 | 设置 → 网页钩子 | 设置 → Webhooks |
+
+其余字段两个产品完全一样：
 
 | 字段 | 填什么 |
 | --- | --- |
 | 目标 URL | `https://nav.example.com/api/webhook` |
 | HTTP 方法 | `POST` |
 | POST 内容类型 | `application/json` |
-| 密钥 | **跟 `--webhook-secret` 完全一致的那个字符串** |
-| 触发条件 | 勾 **推送事件** |
+| 密钥（Secret） | **跟 `--webhook-secret` 完全一致的那个字符串** |
+| 触发条件 | 勾 **推送事件（Push Events）** |
+| 激活 | 勾上 |
 
-保存时 Gitea 会立刻发一个 ping，ghome 回 `pong`——在"最近投递"里看到 **200** 就说明通了。
+保存后点 **Test Delivery**（Gitea 叫"测试推送"），ghome 回 `pong`——在"最近投递"里看到 **200** 就说明通了。
+
+> **不确定自己的实例是哪个？** `curl https://你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo。
+> 注意 Forgejo 的 `/api/v1/version` 会报成 `16.0.5+gitea-1.22.0` 这种样子——`+gitea-` 后面是它兼容的 **Gitea API 版本**，不是产品版本，别看错。
 
 > **密钥必须填。** 没配 `--webhook-secret` 时 `/api/webhook` 直接返回 403 不工作，而不是无鉴权地裸奔。
 
@@ -214,17 +225,12 @@ Gitea 仓库页 → **设置 → 网页钩子 → 添加网页钩子 → 选 Git
 
 事件头同理，`X-Forgejo-Event` / `X-Gitea-Event` / `X-GitHub-Event` 依次识别。
 
-### Forgejo
+### Forgejo 与 Gitea 的差别
 
-Forgejo 是 Gitea 的 fork，**配置方式完全一样**：
+Forgejo 是 Gitea 的 fork，**配置方式几乎一样**，只有两处要留意：
 
-- 仓库页 → **设置 → Webhooks（网页钩子）→ 添加 Webhook → 类型选 `Forgejo`**
-- 目标 URL、HTTP 方法 `POST`、内容类型 `application/json`、密钥与 `--webhook-secret` 一致、触发条件勾推送事件
-
-两点差别：
-
-1. **签名头**：Forgejo 较老版本只发 `X-Gitea-Signature`（源码 `services/webhook/deliver.go` 里就是这个名字），官方文档展示的是 `X-Forgejo-Signature`。两个都认，不用你操心。
-2. **flag 名字仍叫 `--gitea-*`**：`--gitea-url`/`--gitea-owner`/`--gitea-repo` 对 Forgejo 一样用，API 路径也兼容。`--source` 写 `forgejo` 或 `gitea` 都行，两者走同一套代码。
+1. **签名头。** 较老的 Forgejo 源码里只 `Add` 了 `X-Gitea-Signature`；官方文档展示的是 `X-Forgejo-Signature`；事件头则是 `X-Forgejo-Event` 与 `X-Gitea-Event` 并列发出。所以 ghome 这几类头**任意一个匹配即通过**，你不用关心自己那版发哪个。
+2. **flag 名字仍叫 `--gitea-*`。** `--gitea-url` / `--gitea-owner` / `--gitea-repo` / `--gitea-token` 对 Forgejo 一样用（API 路径完全兼容）。`--source` 写 `forgejo` 会让 `/healthz` 和日志显示 `forgejo:...`，写 `gitea` 就显示 `gitea:...`，纯粹是标签，不影响行为。
 
 ### 4. 验证
 
@@ -544,7 +550,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 {
   "status": "ok",              // ok | degraded | error | starting
   "version": "v1.0.0",
-  "source": "gitea:simon/nav/nav.yaml@main",
+  "source": "forgejo:simon/nav/nav.yaml@main",   // 配置还没加载成功时也会报，指向哪里一眼可见
   "revision": "3f2a1b...",     // nav.yaml 的 git blob SHA
   "themeRevision": "tc1b87a...", // nav.yaml + custom.css 的合成修订号
   "updatedAt": "2026-10-12T10:18:40Z",
@@ -577,7 +583,8 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 | `gitea 403` | token 没有这个仓的读权限 | 生成时勾 `repository: read` |
 | `gitea 404` 但文件明明在 | `--gitea-ref` 或 `--gitea-path` 不对 | 注意大小写；`--gitea-path` 是仓内相对路径 |
 | push 了但页面要等一分钟 | webhook 没通，走的轮询 | Gitea 网页钩子的"最近投递"看有没有 200 |
-| webhook 报 401 | 密钥两边不一致 | Gitea 里的密钥和 `--webhook-secret` 必须逐字符相同 |
+| webhook 报 401 | 密钥两边不一致 | 仓库设置里的密钥和 `--webhook-secret` 必须逐字符相同 |
+| 以为自己在跑 Gitea，其实是 Forgejo | `/api/v1/version` 报的 `16.0.5+gitea-1.22.0` 里，`+gitea-` 后是**兼容的 Gitea API 版本** | `curl 你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo |
 | webhook 报 202 但没更新 | 推的不是被监听的分支 | 看响应体里的 `"status":"ignored"` 和 reason |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或 `/healthz` 的 `warnings` |
 | 改了颜色但页面没变 | 浏览器缓存了 `theme.css` | 页面会在配置版本变化时自动带新版本号重拉；硬刷一次也能解决 |

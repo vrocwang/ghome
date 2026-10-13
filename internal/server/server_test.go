@@ -885,3 +885,26 @@ func TestWebhookHandlesForgejoPing(t *testing.T) {
 		t.Errorf("a ping must not trigger a reload, ran %d times", counter.n)
 	}
 }
+
+// The one moment an operator most needs to see what the process is pointed at
+// is when nothing has loaded yet.
+func TestHealthzReportsTheSourceBeforeTheFirstLoad(t *testing.T) {
+	srv, _ := newTestServer(t, Options{
+		Store:  store.New(),
+		Source: "forgejo:simon/homepage/nav.yaml@main",
+	})
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503", rec.Code)
+	}
+	var state healthState
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if state.Source != "forgejo:simon/homepage/nav.yaml@main" {
+		t.Errorf("Source = %q, want the configured source", state.Source)
+	}
+}

@@ -121,6 +121,7 @@ func run() error {
 	srv, err := server.New(server.Options{
 		Store:         st,
 		Trigger:       watch.Kick,
+		Source:        src.Describe(),
 		Icons:         iconAdapter{iconCache},
 		Status:        probes,
 		Branch:        branch,
@@ -408,6 +409,12 @@ func buildSource(o options) (source.Source, error) {
 	case "file":
 		return source.NewFile(o.file)
 	case "gitea", "forgejo":
+		// Both speak the same API; the kind only changes how the source names
+		// itself in logs and /healthz.
+		kind := "gitea"
+		if strings.EqualFold(strings.TrimSpace(o.sourceKind), "forgejo") {
+			kind = "forgejo"
+		}
 		return source.NewGitea(source.GiteaOptions{
 			BaseURL: o.giteaURL,
 			Owner:   o.giteaOwner,
@@ -415,6 +422,7 @@ func buildSource(o options) (source.Source, error) {
 			Ref:     o.giteaRef,
 			Path:    o.giteaPath,
 			Token:   o.giteaToken,
+			Kind:    kind,
 		})
 	default:
 		return nil, fmt.Errorf("unknown --source %q: expected file, gitea or forgejo", o.sourceKind)
