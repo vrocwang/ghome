@@ -22,13 +22,13 @@ import (
 	"syscall"
 	"time"
 
-	"git.xhupo.com/simon/ghome/internal/icons"
-	"git.xhupo.com/simon/ghome/internal/nav"
-	"git.xhupo.com/simon/ghome/internal/server"
-	"git.xhupo.com/simon/ghome/internal/source"
-	"git.xhupo.com/simon/ghome/internal/status"
-	"git.xhupo.com/simon/ghome/internal/store"
-	"git.xhupo.com/simon/ghome/internal/watcher"
+	"github.com/vrocwang/ghome/internal/icons"
+	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/server"
+	"github.com/vrocwang/ghome/internal/source"
+	"github.com/vrocwang/ghome/internal/status"
+	"github.com/vrocwang/ghome/internal/store"
+	"github.com/vrocwang/ghome/internal/watcher"
 )
 
 // version is stamped at build time:
@@ -371,7 +371,7 @@ Examples:
   # polling as a net
   ghome --source=forgejo \
         --forge-url=https://git.example.com \
-        --forge-owner=simon --forge-repo=homepage --forge-ref=main \
+        --forge-owner=your-name --forge-repo=homepage --forge-ref=main \
         --forge-token=$GHOME_FORGE_TOKEN \
         --webhook-secret=$GHOME_WEBHOOK_SECRET
 

@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"git.xhupo.com/simon/ghome/internal/nav"
-	"git.xhupo.com/simon/ghome/internal/server"
-	"git.xhupo.com/simon/ghome/internal/source"
-	"git.xhupo.com/simon/ghome/internal/store"
-	"git.xhupo.com/simon/ghome/internal/watcher"
+	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/server"
+	"github.com/vrocwang/ghome/internal/source"
+	"github.com/vrocwang/ghome/internal/store"
+	"github.com/vrocwang/ghome/internal/watcher"
 )
 
 // These tests wire the real source, store, watcher and HTTP layer together the
@@ -122,7 +122,7 @@ func newNavStack(t *testing.T) *navStack {
 	gitea.set("custom.css", "/* v1 */\n.link { color: red; }\n")
 
 	src, err := source.NewGitea(source.GiteaOptions{
-		BaseURL: gitea.server.URL, Owner: "simon", Repo: "nav",
+		BaseURL: gitea.server.URL, Owner: "acme", Repo: "nav",
 		Ref: "main", Path: "nav.yaml", Token: "test-token",
 	})
 	if err != nil {
@@ -184,7 +184,7 @@ func (s *navStack) meta(t *testing.T) nav.Meta {
 // push delivers a correctly signed push event the way Gitea would.
 func (s *navStack) push(t *testing.T) {
 	t.Helper()
-	body := `{"ref":"refs/heads/main","after":"0123456789abcdef","repository":{"full_name":"simon/nav"}}`
+	body := `{"ref":"refs/heads/main","after":"0123456789abcdef","repository":{"full_name":"acme/nav"}}`
 	mac := hmac.New(sha256.New, []byte(s.secret))
 	mac.Write([]byte(body))
 
@@ -325,7 +325,7 @@ func TestMissingStylesheetDegradesToAWarning(t *testing.T) {
 	gitea.set("nav.yaml", stackedNavDoc) // names custom.css, which does not exist
 
 	src, err := source.NewGitea(source.GiteaOptions{
-		BaseURL: gitea.server.URL, Owner: "simon", Repo: "nav",
+		BaseURL: gitea.server.URL, Owner: "acme", Repo: "nav",
 		Ref: "main", Path: "nav.yaml", Token: "test-token",
 	})
 	if err != nil {

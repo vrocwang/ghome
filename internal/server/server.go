@@ -25,8 +25,8 @@ import (
 	"sync"
 	"time"
 
-	"git.xhupo.com/simon/ghome/internal/nav"
-	"git.xhupo.com/simon/ghome/internal/store"
+	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/store"
 )
 
 //go:embed web

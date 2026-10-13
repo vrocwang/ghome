@@ -1,6 +1,6 @@
 [Unit]
 Description=ghome — git driven navigation page
-Documentation=https://github.com/simon/ghome
+Documentation=https://github.com/vrocwang/ghome
 After=network-online.target
 Wants=network-online.target
 

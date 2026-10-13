@@ -19,7 +19,7 @@ services:
       # The Dockerfile lives at the repository root.
       context: ..
     # Or pin a built image instead of building here:
-    # image: registry.example.com/simon/ghome:latest
+    # image: registry.example.com/vrocwang/ghome:latest
 
     container_name: ghome
     restart: unless-stopped

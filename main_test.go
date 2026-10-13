@@ -16,9 +16,9 @@ import (
 	"testing"
 	"time"
 
-	"git.xhupo.com/simon/ghome/internal/nav"
-	"git.xhupo.com/simon/ghome/internal/status"
-	"git.xhupo.com/simon/ghome/internal/store"
+	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/status"
+	"github.com/vrocwang/ghome/internal/store"
 )
 
 func TestDisplayURL(t *testing.T) {
@@ -82,7 +82,7 @@ func TestBuildSourceBuildsBothKinds(t *testing.T) {
 	}
 	if _, err := buildSource(options{
 		sourceKind: "gitea", forgeURL: "https://git.example.com",
-		forgeOwner: "simon", forgeRepo: "nav",
+		forgeOwner: "acme", forgeRepo: "nav",
 	}); err != nil {
 		t.Errorf("gitea source: %v", err)
 	}

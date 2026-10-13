@@ -58,7 +58,7 @@ LABEL org.opencontainers.image.title="ghome" \
       org.opencontainers.image.description="A navigation page whose content and styling live in git" \
       org.opencontainers.image.version="$VERSION" \
       org.opencontainers.image.revision="$VCS_REF" \
-      org.opencontainers.image.source="https://git.xhupo.com/simon/ghome"
+      org.opencontainers.image.source="https://github.com/vrocwang/ghome"
 
 COPY --from=build /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=build /out/ghome /ghome

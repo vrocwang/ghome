@@ -12,9 +12,9 @@ import (
 	"log/slog"
 	"time"
 
-	"git.xhupo.com/simon/ghome/internal/nav"
-	"git.xhupo.com/simon/ghome/internal/source"
-	"git.xhupo.com/simon/ghome/internal/store"
+	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/source"
+	"github.com/vrocwang/ghome/internal/store"
 )
 
 const (

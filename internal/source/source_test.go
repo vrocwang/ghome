@@ -45,7 +45,7 @@ func TestGiteaFetchDecodesWrappedBase64(t *testing.T) {
 	defer srv.Close()
 
 	src, err := NewGitea(GiteaOptions{
-		BaseURL: srv.URL, Owner: "simon", Repo: "nav",
+		BaseURL: srv.URL, Owner: "acme", Repo: "nav",
 		Ref: "main", Path: "nav.yaml", Token: "tok",
 	})
 	if err != nil {
@@ -65,7 +65,7 @@ func TestGiteaFetchDecodesWrappedBase64(t *testing.T) {
 	if gotAuth != "Bearer tok" {
 		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok")
 	}
-	if gotPath != "/api/v1/repos/simon/nav/contents/nav.yaml" {
+	if gotPath != "/api/v1/repos/acme/nav/contents/nav.yaml" {
 		t.Errorf("path = %q", gotPath)
 	}
 	if gotRef != "main" {
@@ -74,7 +74,7 @@ func TestGiteaFetchDecodesWrappedBase64(t *testing.T) {
 	if gotAccept != "application/json" {
 		t.Errorf("Accept = %q", gotAccept)
 	}
-	if got := src.Describe(); got != "gitea:simon/nav/nav.yaml@main" {
+	if got := src.Describe(); got != "gitea:acme/nav/nav.yaml@main" {
 		t.Errorf("Describe() = %q", got)
 	}
 	if src.Ref() != "main" {
@@ -91,7 +91,7 @@ func TestGiteaFetchSupportsASubPathBaseURL(t *testing.T) {
 	defer srv.Close()
 
 	src, err := NewGitea(GiteaOptions{
-		BaseURL: srv.URL + "/gitea/", Owner: "simon", Repo: "nav",
+		BaseURL: srv.URL + "/gitea/", Owner: "acme", Repo: "nav",
 		Ref: "main", Path: "config/nav.yaml",
 	})
 	if err != nil {
@@ -100,7 +100,7 @@ func TestGiteaFetchSupportsASubPathBaseURL(t *testing.T) {
 	if _, err := src.Fetch(context.Background()); err != nil {
 		t.Fatalf("Fetch() error = %v", err)
 	}
-	want := "/gitea/api/v1/repos/simon/nav/contents/config/nav.yaml"
+	want := "/gitea/api/v1/repos/acme/nav/contents/config/nav.yaml"
 	if gotPath != want {
 		t.Errorf("path = %q, want %q", gotPath, want)
 	}
@@ -360,13 +360,13 @@ func TestNewGiteaRejectsAnEscapingPath(t *testing.T) {
 
 // An operator reading /healthz should see the product they actually run.
 func TestGiteaDescribeUsesTheConfiguredKind(t *testing.T) {
-	base := GiteaOptions{BaseURL: "https://git.example.com", Owner: "simon", Repo: "homepage"}
+	base := GiteaOptions{BaseURL: "https://git.example.com", Owner: "acme", Repo: "homepage"}
 
 	gitea, err := NewGitea(base)
 	if err != nil {
 		t.Fatalf("NewGitea() error = %v", err)
 	}
-	if got := gitea.Describe(); got != "gitea:simon/homepage/nav.yaml@main" {
+	if got := gitea.Describe(); got != "gitea:acme/homepage/nav.yaml@main" {
 		t.Errorf("Describe() = %q, want the gitea default", got)
 	}
 
@@ -376,7 +376,7 @@ func TestGiteaDescribeUsesTheConfiguredKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGitea() error = %v", err)
 	}
-	if got := forgejo.Describe(); got != "forgejo:simon/homepage/nav.yaml@main" {
+	if got := forgejo.Describe(); got != "forgejo:acme/homepage/nav.yaml@main" {
 		t.Errorf("Describe() = %q, want forgejo", got)
 	}
 	if forgejo.Ref() != "main" {

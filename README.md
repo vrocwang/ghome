@@ -165,7 +165,7 @@ ghome --web-dir=/srv/ghome/web ...       # 指过去
 
 ### 1. 建一个配置仓和 token
 
-建议**单独建一个仓**（例如 `simon/nav`）只放导航配置和 `custom.css`，跟代码仓解耦，这样改导航的人不需要代码权限。
+建议**单独建一个仓**（例如 `your-name/nav`）只放导航配置和 `custom.css`，跟代码仓解耦，这样改导航的人不需要代码权限。
 
 然后建 token：**头像 → 设置 → 应用（Applications）→ 生成令牌**，权限只需要**只读的仓库权限**（`read:repository`；拿不准就勾 `repo`，ghome 只会读）。Gitea 和 Forgejo 的界面路径一样。
 
@@ -179,7 +179,7 @@ export GHOME_FORGE_TOKEN=你的token
 ./bin/ghome \
   --source=forgejo \          # 用 Gitea 就写 gitea，两者走同一套代码
   --forge-url=https://git.example.com \
-  --forge-owner=simon \
+  --forge-owner=your-name \
   --forge-repo=homepage \
   --forge-ref=main \
   --webhook-secret=$(openssl rand -hex 32)
@@ -475,8 +475,8 @@ docker run -d --name ghome \
   -p 127.0.0.1:8080:8080 \
   -v ghome-data:/data \
   -e GHOME_SOURCE=forgejo \
-  -e GHOME_FORGE_URL=https://git.xhupo.com \
-  -e GHOME_FORGE_OWNER=simon -e GHOME_FORGE_REPO=homepage \
+  -e GHOME_FORGE_URL=https://git.example.com \
+  -e GHOME_FORGE_OWNER=your-name -e GHOME_FORGE_REPO=homepage \
   -e GHOME_FORGE_TOKEN=... \
   -e GHOME_WEBHOOK_SECRET=... \
   ghome
@@ -546,7 +546,7 @@ if !gitc.IsInsideWorkTree(ctx) {
 **最常见的成因：git clone 用普通用户，构建用 root。**
 
 ```console
-$ git clone https://git.xhupo.com/simon/ghome.git   # 文件属于 simon
+$ git clone https://github.com/vrocwang/ghome.git   # 文件属于普通用户
 $ sudo docker build -t ghome .                       # 进程是 root
 ```
 
@@ -721,7 +721,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 {
   "status": "ok",              // ok | degraded | error | starting
   "version": "v1.0.0",
-  "source": "forgejo:simon/nav/nav.yaml@main",   // 配置还没加载成功时也会报，指向哪里一眼可见
+  "source": "forgejo:your-name/nav/nav.yaml@main",   // 配置还没加载成功时也会报，指向哪里一眼可见
   "revision": "3f2a1b...",     // nav.yaml 的 git blob SHA
   "themeRevision": "tc1b87a...", // nav.yaml + custom.css 的合成修订号
   "updatedAt": "2026-10-12T10:18:40Z",

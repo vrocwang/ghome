@@ -1,4 +1,4 @@
-module git.xhupo.com/simon/ghome
+module github.com/vrocwang/ghome
 
 go 1.26.5
 

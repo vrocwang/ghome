@@ -150,7 +150,7 @@ func TestURLChecks(t *testing.T) {
 		// The whole point of dropping the old allow-list: internal tooling
 		// links like these used to be rejected.
 		"ssh://git@10.0.0.5:2222/srv/repo.git",
-		"vscode://file/Users/simon/code",
+		"vscode://file/Users/you/code",
 		"smb://fileserver/share",
 		"rdp://10.0.0.9",
 		"ftp://files.example.com/pub",

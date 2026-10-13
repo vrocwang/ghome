@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"git.xhupo.com/simon/ghome/internal/nav"
-	"git.xhupo.com/simon/ghome/internal/status"
-	"git.xhupo.com/simon/ghome/internal/store"
+	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/status"
+	"github.com/vrocwang/ghome/internal/store"
 )
 
 const goodDoc = `
@@ -78,7 +78,7 @@ func postWebhook(t *testing.T, srv *Server, body string, headers map[string]stri
 	return rec
 }
 
-const pushMain = `{"ref":"refs/heads/main","after":"0123456789abcdef","repository":{"full_name":"simon/nav"}}`
+const pushMain = `{"ref":"refs/heads/main","after":"0123456789abcdef","repository":{"full_name":"acme/nav"}}`
 
 func TestWebhookIsDisabledWithoutASecret(t *testing.T) {
 	srv, counter := newTestServer(t, Options{Branch: "main"})
@@ -133,7 +133,7 @@ func TestWebhookTriggersOnTheWatchedBranch(t *testing.T) {
 func TestWebhookIgnoresOtherBranches(t *testing.T) {
 	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
 
-	body := `{"ref":"refs/heads/feature/x","repository":{"full_name":"simon/nav"}}`
+	body := `{"ref":"refs/heads/feature/x","repository":{"full_name":"acme/nav"}}`
 	rec := postWebhook(t, srv, body, map[string]string{
 		"X-Gitea-Event":     "push",
 		"X-Gitea-Signature": sign(t, body, "s3cret"),
@@ -891,7 +891,7 @@ func TestWebhookHandlesForgejoPing(t *testing.T) {
 func TestHealthzReportsTheSourceBeforeTheFirstLoad(t *testing.T) {
 	srv, _ := newTestServer(t, Options{
 		Store:  store.New(),
-		Source: "forgejo:simon/homepage/nav.yaml@main",
+		Source: "forgejo:acme/homepage/nav.yaml@main",
 	})
 
 	rec := httptest.NewRecorder()
@@ -904,7 +904,7 @@ func TestHealthzReportsTheSourceBeforeTheFirstLoad(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
 		t.Fatalf("bad JSON: %v", err)
 	}
-	if state.Source != "forgejo:simon/homepage/nav.yaml@main" {
+	if state.Source != "forgejo:acme/homepage/nav.yaml@main" {
 		t.Errorf("Source = %q, want the configured source", state.Source)
 	}
 }
