@@ -65,6 +65,15 @@ make build
 
 ## 接你的私有 Gitea / Forgejo
 
+### 先选：API 直读还是本地文件
+
+| 模式 | 命令 | 适用 |
+| --- | --- | --- |
+| **API 直读**（推荐） | `--source=gitea` | 不需要 git 二进制、不占磁盘；token 只读；`custom.css` 也一起拉 |
+| **本地文件** | `--source=file --file=/srv/nav/nav.yaml` | 你已经有别的机制把仓同步到机器上了（cron `git pull`、CI、rsync）；`custom.css` 从同目录读 |
+
+文件模式下想让 push 也秒级生效，就在 webhook 里加一句 `git -C /srv/nav pull`；或者给 ghome 加 `--admin-token`，pull 完 `curl -X POST -H "Authorization: Bearer $TOKEN" .../api/refresh`。
+
 ### 1. 建一个配置仓和 token
 
 建议**单独建一个仓**（例如 `your-name/nav`）只放导航配置和 `custom.css`，跟代码仓解耦，这样改导航的人不需要代码权限。
@@ -88,7 +97,6 @@ export GHOME_FORGE_TOKEN=你的token
 ```
 
 `curl localhost:8080/healthz` 看到 `"status":"ok"` 就成了。
-
 ### 3. 配 webhook（"秒级"的来源）
 
 仓库页 → **设置（Settings）→ Webhooks（网页钩子）→ 添加 Webhook**，类型按你跑的产品选：
@@ -127,13 +135,6 @@ export GHOME_FORGE_TOKEN=你的token
 
 事件头同理，`X-Forgejo-Event` / `X-Gitea-Event` / `X-GitHub-Event` 依次识别。
 
-### Forgejo 与 Gitea 的差别
-
-Forgejo 是 Gitea 的 fork，**配置方式几乎一样**，只有两处要留意：
-
-1. **签名头。** 较老的 Forgejo 源码里只 `Add` 了 `X-Gitea-Signature`；官方文档展示的是 `X-Forgejo-Signature`；事件头则是 `X-Forgejo-Event` 与 `X-Gitea-Event` 并列发出。所以 ghome 这几类头**任意一个匹配即通过**，你不用关心自己那版发哪个。
-2. **flag 用中性的 `--forge-*`。** `--forge-url` / `--forge-owner` / `--forge-repo` / `--forge-token` 对两个产品一样用（API 路径完全兼容）。`--source` 写 `forgejo` 会让 `/healthz` 和日志显示 `forgejo:...`，写 `gitea` 就显示 `gitea:...`，那只是给诊断信息用的标签，不影响行为。
-
 ### 4. 验证
 
 ```bash
@@ -142,6 +143,13 @@ git commit -am "改个标题" && git push
 ```
 
 ---
+
+### Forgejo 与 Gitea 的差别
+
+Forgejo 是 Gitea 的 fork，**配置方式几乎一样**，只有两处要留意：
+
+1. **签名头。** 较老的 Forgejo 源码里只 `Add` 了 `X-Gitea-Signature`；官方文档展示的是 `X-Forgejo-Signature`；事件头则是 `X-Forgejo-Event` 与 `X-Gitea-Event` 并列发出。所以 ghome 这几类头**任意一个匹配即通过**，你不用关心自己那版发哪个。
+2. **flag 用中性的 `--forge-*`。** `--forge-url` / `--forge-owner` / `--forge-repo` / `--forge-token` 对两个产品一样用（API 路径完全兼容）。`--source` 写 `forgejo` 会让 `/healthz` 和日志显示 `forgejo:...`，写 `gitea` 就显示 `gitea:...`，那只是给诊断信息用的标签，不影响行为。
 
 ## 一次 push 是怎么走到浏览器的
 
@@ -175,9 +183,7 @@ git commit -am "改个标题" && git push
                           浏览器侧另有 60s 兜底：SSE 建不起来时直接轮询 /api/nav
 ```
 
-两条链路是**互补**的：webhook 快但可能丢（Gitea 重启、网络抖动、你忘了配），轮询慢但一定会到。任何一条通了，页面就不会停在旧版本。
-
-事件类型只有一种（"变了"），浏览器收到后重新拉取并按版本号决定要不要重绘。这样即使通知被合并或丢弃，也不会出现"配置更新了但状态灯没更新"这种半新半旧的状态。
+事件类型只有一种（"变了"），浏览器收到后重新拉取并按版本号决定要不要重绘。这样即使通知被合并或丢弃，也不会出现"配置更新了但状态灯没更新"这种半新半旧的状态；服务器侧为什么 webhook 之外还留轮询，见[设计上的几个取舍](#设计上的几个取舍)。
 
 浏览器侧也有两条独立的路：
 
@@ -369,17 +375,6 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 ```
 
 全部静态链接（`file` 会告诉你 `statically linked`），拷到服务器上直接跑。
-
-### 关于"配置托管在 git"的两种放法
-
-| 模式 | 命令 | 适用 |
-| --- | --- | --- |
-| **API 直读**（推荐） | `--source=gitea` | 不需要 git 二进制、不占磁盘；token 只读；`custom.css` 也一起拉 |
-| **本地文件** | `--source=file --file=/srv/nav/nav.yaml` | 你已经有别的机制把仓同步到机器上了（cron `git pull`、CI、rsync）；`custom.css` 从同目录读 |
-
-文件模式下想让 push 也秒级生效，就在 webhook 里加一句 `git -C /srv/nav pull`；或者给 ghome 加 `--admin-token`，pull 完 `curl -X POST -H "Authorization: Bearer $TOKEN" .../api/refresh`。
-
----
 
 ## nav.yaml 配置
 
@@ -641,64 +636,38 @@ status:
 
 ## 图标是怎么来的
 
-页面不再让浏览器直接去第三方站点取 `favicon.ico`，而是走 **`/api/icon?h=<host>`**，由服务端解析和缓存：
-
-1. **本地图标目录**（`--icon-dir`）优先，命中就完全不联网——也不查缓存。文件名是 `<host>` 加扩展名，扩展名按 `.svg` → `.png` → `.ico` → `.webp` → `.jpg` → `.jpeg` 的顺序找，第一个存在的生效。host 取链接 URL 的主机名，**已转小写并剥掉端口**，所以 `http://nas:8080` 和 `http://nas:9090` 都找 `nas.svg`。
-
-   ```bash
-   ghome --icon-dir=/var/lib/ghome/icons
-   ```
-
-   ```text
-   /var/lib/ghome/icons/
-   ├── git.internal.svg      # 给 https://git.internal/
-   ├── nas.png               # 给 http://nas:8080/ 和 http://nas:9090/
-   └── grafana.internal.svg
-   ```
-
-   这一条是内网服务的**可靠解**：它们大多没有 favicon，DNS 也可能根本解析不了，而本地文件不需要网络也不需要 DNS。实测对解析不了的 host 响应耗时 0.4ms（走文件系统），而联网解析会超时。文件超过 512KB 会被忽略（然后照常回退到联网解析）。
-
-   解析顺序里它排在**缓存之前**，所以放进一个文件立刻生效，不用等缓存过期；反过来，删掉一个文件也会立刻回退到联网结果。
-2. 否则抓页面 HTML，解析 `<link rel="icon">`（含 `shortcut icon` / `apple-touch-icon` / `mask-icon`），会跟随 `<base href>` 解析相对路径；有多个就取 `sizes` 最大的。
-3. 没有 `<link>` 就退到 `<host>/favicon.ico`。
-4. 校验返回的确实是图片（看 `Content-Type`，可疑时用前 512 字节嗅探），否则算失败。
-5. 结果进 LRU 缓存（默认 512 条 **且** 总共 8 MB，24 小时过期；失败结果缓存 5 分钟，
-   避免对一个挂掉的站点反复重试）。两个上限都要满足：只限条数的话，512 × 512KB
-   最坏是 256 MB。
-
-这样解决的几件事：用 Vite/Next 打包的站点图标是 `/assets/icon-a1b2c3.svg` 这种哈希名，根目录必然 404；内网服务大多根本没有 favicon；解析不到时前端回退到字母头像。
-
-**所以不是每次访问都去抓。** 一次图标的实际代价按这个顺序被拦住：
+页面不让浏览器直接去第三方站点取 `favicon.ico`，而是走 **`/api/icon?h=<host>`**，由服务端解析和缓存。所以它不是每次访问都去抓——一层拦住就够了：
 
 | 顺序 | 拦在哪 | 说明 |
 | --- | --- | --- |
 | 1 | `--icon-dir` 本地文件 | 命中就**完全不联网**，也不查缓存 |
-| 2 | 服务端内存缓存 | 24 小时（失败结果 5 分钟），512 条且总共 8 MB |
-| 3 | 联网解析 | 页面声明的 `<link rel="icon">`，兜底再猜 `/favicon.ico` |
-| 4 | 浏览器缓存 | 7 天，URL 带 `?v=<配置 revision>` |
+| 2 | 服务端内存缓存 | 24 小时（失败结果 5 分钟），512 条 **且** 总共 8 MB |
+| 3 | 联网解析 | 见下 |
+| 4 | 浏览器缓存 | 7 天，URL 带 `?v=<配置 revision>`，配置一变就自动失效 |
 
-实测（3 个链接、其中一个 host 重复）：启动预热共 6 次上游请求（3 次页面 + 3 次图标）；
-之后连打 5 次 `/api/icon`，上游请求 **0 次**，每次约 2.5 ms。
+联网那一层的做法：抓页面 HTML 解析 `<link rel="icon">`（含 `shortcut icon` / `apple-touch-icon` / `mask-icon`，跟随 `<base href>`，多个取 `sizes` 最大的），没有就退到 `<host>/favicon.ico`，最后校验返回的确实是图片。这样用 Vite/Next 打包的站点（图标是 `/assets/icon-a1b2c3.svg` 这种哈希名，根目录必然 404）和内网服务也能显示；解析不到时前端回退到字母头像。
 
-两个要注意的点：**内存缓存不持久**，所以每次重启都会重新预热一遍；**预热按页面 URL
-去重**，所以同一个 host 上的多个链接会各抓一次（只有第一个会被真正用到）。同时浏览器**一次都不用访问外网**（favicon 走的是这个代理，不是第三方）。CSP 的 `img-src` 是 `'self' data: http: https:`——后面两个是给配置里显式写的
-`icon:` 图片 URL 留的，见下。
+实测（3 个链接）：启动预热 6 次上游请求；之后连打 5 次 `/api/icon`，上游 **0 次**、每次约 2.5 ms。
 
-> **一个 host 只有一个图标。** 前端的请求是 `/api/icon?h=<host>`，服务端按 host 取配置里
-> **第一个**用它的链接来解析——所以 `nas:8080` 和 `nas:9090` 共用同一个图标。想各自不同，
-> 用链接自己的 `icon:` 字段，或在 `--icon-dir` 里放对应的文件。
+**本地目录是内网服务的可靠解**：它们大多没有 favicon，DNS 也可能根本解析不了，而本地文件不需要网络也不需要 DNS（实测 0.4 ms）。文件名是 `<host>` 加扩展名，按 `.svg` → `.png` → `.ico` → `.webp` → `.jpg` → `.jpeg` 取第一个存在的；host **转小写并剥掉端口**，所以 `nas:8080` 和 `nas:9090` 都找 `nas.svg`。超过 512KB 的文件会被忽略。
+
+```bash
+ghome --icon-dir=/var/lib/ghome/icons
+```
+
+```text
+/var/lib/ghome/icons/
+├── git.internal.svg      # 给 https://git.internal/
+├── nas.png               # 给 http://nas:8080/ 和 http://nas:9090/
+└── grafana.internal.svg
+```
+
+> **一个 host 只有一个图标。** 前端的请求是 `/api/icon?h=<host>`，服务端按 host 取配置里**第一个**用它的链接来解析。想同机的不同服务各有图标，用链接自己的 `icon:` 字段，或在 `--icon-dir` 里放对应的文件。
 >
-> 两个 key 容易混：**本地图标目录**按剥掉端口的主机名找（同上）；**内存缓存**按完整的
-> 页面 URL 记。后者只影响启动预热时的上游流量——同一个 host 上的多个链接会被各抓一遍，
-> 而最终只有第一个会被用到。
+> **两个 key 容易混**：本地图标目录按剥掉端口的主机名找（同上），内存缓存按完整的页面 URL 记。后者只影响启动预热时的上游流量——同一个 host 上的多个链接会被各抓一遍，而最终只有第一个会被用到。（还有个直接后果：**内存缓存不持久**，每次重启都会重新预热一遍。）
 
-> **安全边界**：`/api/icon` 只服务当前配置里出现过的 host，不是一个开放代理。响应另外带 `Content-Security-Policy: default-src 'none'; sandbox`——因为第三方 SVG 从我们自己的 domain 发出去，如果不加这个，直接打开图标 URL 就能执行脚本。
->
-> 允许列表管的是**每一跳**，不只是第一个 URL：页面 HTML 里声明的图标如果指向
-> 别的 host，会被拒绝；302 跳到别的 host 也会被拒绝。代价是**放在 CDN 上的图标不会
-> 被抓取**——这种情况用 `--icon-dir` 放一个本地文件。
+解析顺序的完整说明、`/api/icon` 的安全边界（为什么它不是开放代理、允许列表管每一跳、CDN 图标为什么抓不到）以及缓存实测数据，见 [`docs/icons.md`](docs/icons.md)。
 
----
 
 ## 命令行与环境变量
 
@@ -748,49 +717,9 @@ status:
 
 ## HTTP 接口
 
-| 方法 | 路径 | 说明 |
-| --- | --- | --- |
-| `GET` | `/` | 页面本身（内嵌在二进制里，可被 `--web-dir` 覆盖） |
-| `GET` | `/theme.css` | 由 `style:` 令牌生成的 CSS 变量 + 配置仓里的 `custom.css` |
-| `GET` | `/favicon.ico` | 站点图标，固定以 SVG 提供，可被 `--web-dir` 覆盖 |
-| `GET` | `/assets/*` | 内嵌资源，可被 `--web-dir` 逐文件覆盖 |
-| `GET` | `/api/nav` | 当前配置 + 版本元信息；尚未加载到配置时返回 503 |
-| `GET` | `/api/status` | 探测结果；未开启探测时返回 `{"enabled":false}` 而不是错误 |
-| `GET` | `/api/icon?h=<host>` | 图标代理。仅限配置里出现过的 host，响应带沙箱 CSP |
-| `GET` | `/api/events` | SSE 流。连上先发 `hello`（带当前 revision），之后每次变更发 `changed`。并发上限 256，超出返回 503（一个标签页一条，正常远够；`/healthz` 的 `subscribers` 是当前数） |
-| `POST` | `/api/webhook` | Gitea 推送回调，HMAC 校验 |
-| `POST` | `/api/refresh` | 手动触发重载，需要 `Authorization: Bearer <admin-token>` |
-| `GET` | `/healthz` | 健康检查，见下 |
-
-`/healthz` 返回：
-
-```json
-{
-  "status": "ok",              // ok | degraded | error | starting
-  "version": "v1.0.0",
-  "source": "forgejo:your-name/nav/nav.yaml@main",   // 配置还没加载成功时也会报，指向哪里一眼可见
-  "revision": "3f2a1b...",     // forge 模式是 git blob SHA，文件模式是内容 sha256
-  "themeRevision": "tc1b87a...", // nav.yaml + custom.css 的合成修订号
-  "updatedAt": "2026-10-12T10:18:40Z",
-  "groups": 3, "links": 10,
-  "subscribers": 2,            // 当前挂着的浏览器/SSE 连接数
-  "uptime": "3h12m",
-  "goroutines": 8,             // 下面三个是给低配机器看的
-  "heapMB": 0.7,
-  "sysMB": 12.8,
-  "probesEnabled": true,       // 开启探测时才有下面两项
-  "probesUp": 10, "probesDown": 2,
-  "iconsCached": 8,
-  "warnings": ["ignored unknown field (line 17: field titel ...)"],
-  "lastError": "..."           // 只在这个字段出现时才有
-}
-```
-
-`status` 的含义：`ok` 一切正常 · `degraded` 页面在正常工作但 git 里的配置是坏的（**监控该盯这个**）· `error` 一份配置都没加载成功 · `starting` 刚启动还在拉。HTTP 状态码只在 `error`/`starting` 时是 503。`warnings` 存在不影响 `status`——那是"容忍了但你该知道"。
-
-访问日志**只记路径，不记查询串**：`/api/icon` 的 query 里带着配置的链接 URL。
-
----
+所有端点（含 `/healthz` 的完整返回）见 [`docs/http-api.md`](docs/http-api.md)。
+日常只有两个会手敲：`GET /healthz` 看状态，`POST /api/refresh` 手动触发重载
+（需要 `--admin-token`）。
 
 ## 排障
 
