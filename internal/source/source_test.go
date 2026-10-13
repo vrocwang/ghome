@@ -62,8 +62,8 @@ func TestGiteaFetchDecodesWrappedBase64(t *testing.T) {
 	if snap.Rev != "abc123" {
 		t.Errorf("Rev = %q, want abc123", snap.Rev)
 	}
-	if gotAuth != "token tok" {
-		t.Errorf("Authorization = %q, want %q", gotAuth, "token tok")
+	if gotAuth != "Bearer tok" {
+		t.Errorf("Authorization = %q, want %q", gotAuth, "Bearer tok")
 	}
 	if gotPath != "/api/v1/repos/simon/nav/contents/nav.yaml" {
 		t.Errorf("path = %q", gotPath)

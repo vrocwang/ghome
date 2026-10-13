@@ -46,7 +46,9 @@ type GiteaOptions struct {
 	// Path is the file inside the repository. Defaults to nav.yaml.
 	Path string
 	// Token is a read-only access token for private repositories. Empty for
-	// public ones. Both Gitea and Forgejo accept it as "Authorization: token".
+	// public ones. Sent as "Authorization: Bearer", which both Gitea and
+	// Forgejo accept and which survives proxies that only forward the standard
+	// RFC 6750 scheme.
 	Token string
 	// Kind names the product for Describe(): "gitea" or "forgejo". Defaults to
 	// "gitea".
@@ -151,7 +153,7 @@ func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 	}
 	req.Header.Set("Accept", "application/json")
 	if g.token != "" {
-		req.Header.Set("Authorization", "token "+g.token)
+		req.Header.Set("Authorization", "Bearer "+g.token)
 	}
 
 	resp, err := g.client.Do(req)
@@ -215,7 +217,7 @@ func (g *Gitea) fetchRaw(ctx context.Context, path string) ([]byte, error) {
 		return nil, err
 	}
 	if g.token != "" {
-		req.Header.Set("Authorization", "token "+g.token)
+		req.Header.Set("Authorization", "Bearer "+g.token)
 	}
 	resp, err := g.client.Do(req)
 	if err != nil {

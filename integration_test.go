@@ -45,7 +45,7 @@ func newFakeGitea(t *testing.T) *fakeGitea {
 	g := &fakeGitea{files: map[string]string{}, requests: map[string]int{}}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/repos/{owner}/{repo}/contents/{path...}", func(w http.ResponseWriter, r *http.Request) {
-		if got := r.Header.Get("Authorization"); got != "token test-token" {
+		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
