@@ -105,7 +105,6 @@ type Engine struct {
 	Name    string `yaml:"name" json:"name"`
 	URL     string `yaml:"url" json:"url"`
 	Keyword string `yaml:"keyword" json:"keyword,omitempty"`
-	Icon    string `yaml:"icon" json:"icon,omitempty"`
 }
 
 // Status configures the optional service health prober. It is off by default:

@@ -39,11 +39,14 @@
 
 ```bash
 make build
-./bin/ghome --source=file --file=./nav.yaml
+./bin/ghome --source=file --file=./nav.yaml --poll=1s
 # 打开 http://127.0.0.1:8080/
 ```
 
-现在编辑 `nav.yaml` 存盘，**页面会在 1 秒内自己更新，不需要刷新**（`--poll` 默认 60s，本地演示可以加 `--poll=1s`）。
+现在编辑 `nav.yaml` 存盘，**页面会在 1 秒内自己更新，不需要刷新**。
+
+`--poll=1s` 是给本地演示的：ghome **不用文件系统通知**，它靠轮询（或 webhook、
+`POST /api/refresh`）发现变化。生产的默认值是 60s，也就是"改完最多一分钟生效"。
 
 想先看全部可用字段，读 [`nav.example.yaml`](nav.example.yaml)。
 
@@ -128,11 +131,11 @@ style:
 
 它的内容会被追加到 `/theme.css` 后面，也就是内嵌样式表和所有令牌**之后**，所以天然优先级更高。改它同样只需要 push。
 
-**只改 `custom.css`、不动 `nav.yaml` 也能热更新**，这一点值得说明，因为它踩了一个坑：`nav.yaml` 的 blob SHA 在这种情况下不会变，如果浏览器拿它当"要不要重新拉样式表"的依据，页面就会一直显示旧样式直到有人手动刷新。所以 `/api/nav` 的 `meta` 里有两个 revision：
+**只改 `custom.css`、不动 `nav.yaml` 也能热更新**，这一点值得说明，因为它踩了一个坑：`nav.yaml` 的修订号在这种情况下不会变，如果浏览器拿它当"要不要重新拉样式表"的依据，页面就会一直显示旧样式直到有人手动刷新。所以 `/api/nav` 的 `meta` 里有两个 revision：
 
 | 字段 | 是什么 | 变了代表 |
 | --- | --- | --- |
-| `revision` | `nav.yaml` 的 git blob SHA | 配置内容变了 |
+| `revision` | forge 模式下是 `nav.yaml` 的 git blob SHA；文件模式下是内容的 sha256 | 配置内容变了 |
 | `themeRevision` | 覆盖**两份文件**的短哈希 | 配置**或**样式表变了 |
 
 浏览器用 `themeRevision` 决定要不要重新拉 `/theme.css`（它同时是 cache buster），用 `revision` 决定要不要重绘整个页面。两者由服务端在同一个原子操作里发布，所以不存在"样式更新了但配置还是旧的"这种中间态。
@@ -263,13 +266,14 @@ git commit -am "改个标题" && git push
         │                       两份文件的修订号合成 themeRevision
         │                              │
         ▼                              ▼
-   60s 轮询兜底 ─────────────▶   GET /api/events  (浏览器长连接)
-                                       │  事件只有一种："变了，重新读"
-                                       ▼
-                        重新拉 /api/nav + /api/status + theme.css
-                                     │
-                                     ▼
-                          版本号变了才重绘 + "导航已更新" 提示
+   60s 轮询兜底 ──▶ 重新读上面两个文件   GET /api/events  (浏览器长连接)
+   （服务器侧）                          │  事件只有一种："变了，重新读"
+                                         ▼
+                          重新拉 /api/nav + /api/status + theme.css
+                                         │
+                                         ▼
+                            版本号变了才重绘 + "导航已更新" 提示
+                          浏览器侧另有 60s 兜底：SSE 建不起来时直接轮询 /api/nav
 ```
 
 两条链路是**互补**的：webhook 快但可能丢（Gitea 重启、网络抖动、你忘了配），轮询慢但一定会到。任何一条通了，页面就不会停在旧版本。
@@ -357,7 +361,7 @@ status:
 
 判定口径（这是有意的取舍）：`2xx`/`3xx`/`401`/`403` 都算**在线**——返回 401 说明服务活着，只是要登录；`5xx`、其他 `4xx`、超时、连不上算**无法访问**。先发 `HEAD`，遇到 `405`/`501` 等情况自动退回 `GET`（只读几 KB 就断开）。
 
-探测在独立 goroutine 里按自己的节奏跑，跟配置轮询互不影响；结果变化时才通过 SSE 推给浏览器（所以状态灯更新是即时的，而且安静的时候不产生任何事件）。改 `interval`/`timeout` 会重建探测器生效，改别的不会——避免为了改一个标题把已有的探测结果丢掉。
+探测在独立 goroutine 里按自己的节奏跑，跟配置轮询互不影响；结果变化时才通过 SSE 推给浏览器（所以状态灯更新是即时的，而且安静的时候不产生任何事件）。改 `interval`/`timeout`/`concurrency` 会重建探测器（已有的探测结果会被丢弃），改别的不会——避免为了改一个标题把已有的探测结果丢掉。
 
 ---
 
@@ -794,7 +798,9 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 `--poll=0` 值得单独说一句：它**关掉轮询**，配置只在启动时读一次，之后靠 webhook
 推送或 `POST /api/refresh` 更新。实测 8 秒内对 forge 的请求数：`--poll=2s` 是 4 次，
 `--poll=0` 是 1 次（仅启动）；`0s` 和 `-1s` 同样是关闭。日志里会如实显示
-`poll=off`，非法值（如 `0.5`）会警告并回退到默认。
+`poll=off`。非法值的处理**两条路不一样**：`GHOME_POLL=0.5` 会打一条警告并回退到
+默认 60s（缺单位是常见笔误，不至于让服务起不来），而 `--poll=0.5` 是**启动即报错
+退出**（命令行上写错应当立刻知道）。
 
 代价是**不再有兜底**：webhook 要是被上游挡住（比如被反代的 Basic 认证拦了），
 页面就再也不会更新，而且没有任何迹象——`/healthz` 还会一直报 `ok`。所以先用
@@ -827,7 +833,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
   "status": "ok",              // ok | degraded | error | starting
   "version": "v1.0.0",
   "source": "forgejo:your-name/nav/nav.yaml@main",   // 配置还没加载成功时也会报，指向哪里一眼可见
-  "revision": "3f2a1b...",     // nav.yaml 的 git blob SHA
+  "revision": "3f2a1b...",     // forge 模式是 git blob SHA，文件模式是内容 sha256
   "themeRevision": "tc1b87a...", // nav.yaml + custom.css 的合成修订号
   "updatedAt": "2026-10-12T10:18:40Z",
   "groups": 3, "links": 10,
@@ -900,7 +906,7 @@ make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
 
 **关于安全：**
 - token 只存在服务端内存/环境变量里，不进 URL、不进日志、不进响应。
-- 响应带严格 CSP，而且图标改成服务端代理之后 `img-src` 已经收紧到 `'self' data:`——浏览器不再访问任何第三方。
+- 响应带严格 CSP。**favicon 走服务端代理**，所以那条路径上浏览器不访问第三方；但配置里显式写的 `icon:` / `logo:` 图片 URL 是浏览器直连的，所以 `img-src` 是 `'self' data: http: https:`（`http:` 是给纯 HTTP 的内网部署留的）。
 - `/api/icon` 只服务配置里出现过的 host，不是开放代理；图标响应额外带 `sandbox` CSP，防止第三方 SVG 直接被执行。
 - `style` 令牌和 `custom.css` 的路径都经过白名单校验（颜色只收 `#hex`/`rgb()`/`hsl()`/关键字，路径不许 `..`、不许绝对路径、必须 `.css` 结尾），因为它们的值会进 CSS、路径会进文件系统。
 - `url` 走危险协议黑名单而不是白名单，既挡住了 `javascript:` 这类，又不限制 `ssh://`/`vscode://` 这些真实用途。
