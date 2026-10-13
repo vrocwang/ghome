@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simon/ghome/internal/nav"
-	"github.com/simon/ghome/internal/source"
-	"github.com/simon/ghome/internal/store"
+	"git.xhupo.com/simon/ghome/internal/nav"
+	"git.xhupo.com/simon/ghome/internal/source"
+	"git.xhupo.com/simon/ghome/internal/store"
 )
 
 const (

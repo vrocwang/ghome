@@ -41,7 +41,7 @@ const (
 	defaultMaxBytes     = 512 << 10
 	defaultMaxHTMLBytes = 256 << 10
 	defaultTimeout      = 8 * time.Second
-	defaultUserAgent    = "ghome-icons/1.0 (+https://github.com/simon/ghome)"
+	defaultUserAgent    = "ghome-icons/1.0 (+https://git.xhupo.com/simon/ghome)"
 )
 
 const (

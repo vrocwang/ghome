@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simon/ghome/internal/nav"
-	"github.com/simon/ghome/internal/status"
-	"github.com/simon/ghome/internal/store"
+	"git.xhupo.com/simon/ghome/internal/nav"
+	"git.xhupo.com/simon/ghome/internal/status"
+	"git.xhupo.com/simon/ghome/internal/store"
 )
 
 const goodDoc = `

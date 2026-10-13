@@ -16,11 +16,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/simon/ghome/internal/nav"
-	"github.com/simon/ghome/internal/server"
-	"github.com/simon/ghome/internal/source"
-	"github.com/simon/ghome/internal/store"
-	"github.com/simon/ghome/internal/watcher"
+	"git.xhupo.com/simon/ghome/internal/nav"
+	"git.xhupo.com/simon/ghome/internal/server"
+	"git.xhupo.com/simon/ghome/internal/source"
+	"git.xhupo.com/simon/ghome/internal/store"
+	"git.xhupo.com/simon/ghome/internal/watcher"
 )
 
 // These tests wire the real source, store, watcher and HTTP layer together the

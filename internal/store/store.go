@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/simon/ghome/internal/nav"
+	"git.xhupo.com/simon/ghome/internal/nav"
 )
 
 // Store is a concurrency safe holder for the current document.
