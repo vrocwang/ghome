@@ -15,19 +15,30 @@
 
 ## 目录
 
+**上手**
+
 - [30 秒跑起来](#30-秒跑起来)
-- [三套布局](#三套布局)
-- [改样式不用重新编译](#改样式不用重新编译)
 - [接你的私有 Gitea / Forgejo](#接你的私有-gitea--forgejo)
 - [一次 push 是怎么走到浏览器的](#一次-push-是怎么走到浏览器的)
-- [图标是怎么来的](#图标是怎么来的)
-- [服务状态灯](#服务状态灯)
+- [部署](#部署)
+
+**配置**
+
 - [nav.yaml 配置](#navyaml-配置)
 - [校验分级](#校验分级)
-- [部署](#部署)
+- [改样式不用重新编译](#改样式不用重新编译)
+- [三套布局](#三套布局)
+- [服务状态灯](#服务状态灯)
+- [图标是怎么来的](#图标是怎么来的)
+
+**参考**
+
 - [命令行与环境变量](#命令行与环境变量)
 - [HTTP 接口](#http-接口)
 - [排障](#排障)
+
+**其他**
+
 - [设计上的几个取舍](#设计上的几个取舍)
 - [开发](#开发)
 
@@ -49,118 +60,6 @@ make build
 `POST /api/refresh`）发现变化。生产的默认值是 60s，也就是"改完最多一分钟生效"。
 
 想先看全部可用字段，读 [`nav.example.yaml`](nav.example.yaml)。
-
----
-
-## 三套布局
-
-在 `nav.yaml` 里改一行，push 就换：
-
-```yaml
-layout: grid        # 精致卡片（默认）：每组一张卡，描述和标签都显示
-layout: dashboard   # 紧凑密集：行高更小、分组带色条、隐藏描述，服务多时用
-layout: list        # 单列：每组一行，链接横向排成芯片，最省纵向空间
-```
-
-三套布局共用同一份内容，只是密度和呈现方式不同：
-
-**grid**（默认）——每组一张卡，描述和标签都显示：
-
-![grid 布局](docs/layout-grid.png)
-
-**dashboard**——紧凑密集，分组带顶部色条，服务多时用：
-
-![dashboard 布局](docs/layout-dashboard.png)
-
-**list**——每组一行，链接横向排成芯片，最省纵向空间：
-
-![list 布局](docs/layout-list.png)
-
-| | grid | dashboard | list |
-| --- | --- | --- | --- |
-| 卡片列宽 | ≥320px | ≥262px | 单列 |
-| 链接描述 | 显示 | 隐藏 | 隐藏 |
-| 分组色条 | 图标底 + 悬停描边 | 顶部渐变条 | 图标底 |
-| 适合 | 十几到几十个入口 | 上百个入口 | 每组的链接都很短 |
-
-不管你选哪套，页面上的能力都一样：搜索过滤、`↑`/`↓` 选择、`Enter` 打开、每个链接的 `hotkey`、置顶区、状态灯、分组配色。
-
-**置顶**：`pinned: true` 的链接会被提升到页面顶部的置顶区，**并且不再出现在它所属的分组里**（避免同一个入口出现两次）。如果某个分组因此变空，该分组会被隐藏。
-
-**分组配色**：给分组一个 `color`，它的图标底和卡片悬停描边就会带上这个色；dashboard 布局下还会变成顶部色条。
-
----
-
-## 改样式不用重新编译
-
-这是刻意设计的：**样式是数据，不是代码**。分四层，按你需要改的深度选。
-
-### 第 1 层：`nav.yaml` 里的 `style:` 令牌（覆盖 90% 的需求）
-
-```yaml
-style:
-  accent: "#7c3aed"       # 主色
-  background: "#faf9ff"   # 页面底色
-  surface: "#ffffff"      # 卡片底色
-  text: "#1a1a1f"
-  muted: "#6b6b78"
-  border: "#e8e6f0"
-  font: "Inter, system-ui, sans-serif"
-  radius: 20              # 圆角
-  fontSize: 15            # 正文字号
-  width: 1280             # 内容最大宽度
-  iconSize: 22            # 图标尺寸
-  density: compact        # comfortable | compact
-  cardStyle: strong       # soft | flat | strong
-```
-
-这些令牌由 `/theme.css` 以 CSS 变量发给浏览器，页面所有颜色、间距、圆角都从它们派生（渐变和悬停色用 `color-mix()` 算出来），所以改一个 `accent` 整页都跟着变。
-
-**改完 push 就生效**，包括已经开着的页面——浏览器收到 SSE 事件后会带着新版本号重新拉 `theme.css`。
-
-写错了不会让页面挂掉：颜色只接受 `#hex` / `rgb()` / `hsl()` / 颜色关键字，字号必须在 `11~24`，越界的值会被忽略并在页面顶部提示。这条限制是有意的——`style` 的值会直接进 CSS，不校验就等于开了一个注入点。
-
-### 第 2 层：`custom.css`（想写具体规则时）
-
-在**同一个仓库**里放一个样式表，然后指过去：
-
-```yaml
-style:
-  customCss: "custom.css"
-```
-
-它的内容会被追加到 `/theme.css` 后面，也就是内嵌样式表和所有令牌**之后**，所以天然优先级更高。改它同样只需要 push。
-
-**只改 `custom.css`、不动 `nav.yaml` 也能热更新**，这一点值得说明，因为它踩了一个坑：`nav.yaml` 的修订号在这种情况下不会变，如果浏览器拿它当"要不要重新拉样式表"的依据，页面就会一直显示旧样式直到有人手动刷新。所以 `/api/nav` 的 `meta` 里有两个 revision：
-
-| 字段 | 是什么 | 变了代表 |
-| --- | --- | --- |
-| `revision` | forge 模式下是 `nav.yaml` 的 git blob SHA；文件模式下是内容的 sha256 | 配置内容变了 |
-| `themeRevision` | 覆盖**两份文件**的短哈希 | 配置**或**样式表变了 |
-
-浏览器用 `themeRevision` 决定要不要重新拉 `/theme.css`（它同时是 cache buster），用 `revision` 决定要不要重绘整个页面。两者由服务端在同一个原子操作里发布，所以不存在"样式更新了但配置还是旧的"这种中间态。
-
-`/healthz` 里两个值都能看到，出问题时直接在终端确认。
-
-起点见 [`custom.css.example`](custom.css.example)，里面列了所有可用变量。适合：内嵌样式表没暴露成令牌的细节、给某个分组单独开小灶、加一层纯 CSS 装饰。
-
-### 第 3 层：`--dump-web` + `--web-dir`（要动 DOM 结构或基础样式表时）
-
-```bash
-ghome --dump-web=/srv/ghome/web          # 把内嵌前端导出来
-vim /srv/ghome/web/assets/style.css      # 随便改
-ghome --web-dir=/srv/ghome/web ...       # 指过去
-```
-
-**逐文件回退**：`--web-dir` 里有就用磁盘上的，没有就用内嵌的。所以你只需要放想改的那一个文件——上面导出的目录里删掉 `app.js`，`app.js` 就继续跟着二进制走；升级 ghome 时没被覆盖的文件自动跟着更新。
-
-`--dump-web` 的意思是"给我一份能跑的当前版本当起点"，不用你凭空建目录、猜文件名。
-
-### 第 4 层：改 Go 代码
-
-只有要加全新视图或新交互时才需要。到这一层 `internal/server/web/` 下的文件就是源码。
-
-**样式为什么当初要内嵌？** 因为单文件部署意味着不存在"CSS 和二进制版本对不上"、"文件缺失"、"权限不对"、"只传了一半"这类故障，也不存在升级时忘记替换某个资源。这个价值我不想丢——所以做法是**保留内嵌作为默认，把可改的部分变成数据**，而不是把前端拆出去。
 
 ---
 
@@ -300,89 +199,293 @@ git commit -am "改个标题" && git push
 
 ---
 
-## 图标是怎么来的
+## 部署
 
-页面不再让浏览器直接去第三方站点取 `favicon.ico`，而是走 **`/api/icon?h=<host>`**，由服务端解析和缓存：
+### systemd（推荐）
 
-1. **本地图标目录**（`--icon-dir`）优先，命中就完全不联网——也不查缓存。文件名是 `<host>` 加扩展名，扩展名按 `.svg` → `.png` → `.ico` → `.webp` → `.jpg` → `.jpeg` 的顺序找，第一个存在的生效。host 取链接 URL 的主机名，**已转小写并剥掉端口**，所以 `http://nas:8080` 和 `http://nas:9090` 都找 `nas.svg`。
-
-   ```bash
-   ghome --icon-dir=/var/lib/ghome/icons
-   ```
-
-   ```
-   /var/lib/ghome/icons/
-   ├── git.internal.svg      # 给 https://git.internal/
-   ├── nas.png               # 给 http://nas:8080/ 和 http://nas:9090/
-   └── grafana.internal.svg
-   ```
-
-   这一条是内网服务的**可靠解**：它们大多没有 favicon，DNS 也可能根本解析不了，而本地文件不需要网络也不需要 DNS。实测对解析不了的 host 响应耗时 0.4ms（走文件系统），而联网解析会超时。文件超过 512KB 会被忽略（然后照常回退到联网解析）。
-
-   解析顺序里它排在**缓存之前**，所以放进一个文件立刻生效，不用等缓存过期；反过来，删掉一个文件也会立刻回退到联网结果。
-2. 否则抓页面 HTML，解析 `<link rel="icon">`（含 `shortcut icon` / `apple-touch-icon` / `mask-icon`），会跟随 `<base href>` 解析相对路径；有多个就取 `sizes` 最大的。
-3. 没有 `<link>` 就退到 `<host>/favicon.ico`。
-4. 校验返回的确实是图片（看 `Content-Type`，可疑时用前 512 字节嗅探），否则算失败。
-5. 结果进 LRU 缓存（默认 512 条 **且** 总共 8 MB，24 小时过期；失败结果缓存 5 分钟，
-   避免对一个挂掉的站点反复重试）。两个上限都要满足：只限条数的话，512 × 512KB
-   最坏是 256 MB。
-
-这样解决的几件事：用 Vite/Next 打包的站点图标是 `/assets/icon-a1b2c3.svg` 这种哈希名，根目录必然 404；内网服务大多根本没有 favicon；解析不到时前端回退到字母头像。
-
-**所以不是每次访问都去抓。** 一次图标的实际代价按这个顺序被拦住：
-
-| 顺序 | 拦在哪 | 说明 |
-| --- | --- | --- |
-| 1 | `--icon-dir` 本地文件 | 命中就**完全不联网**，也不查缓存 |
-| 2 | 服务端内存缓存 | 24 小时（失败结果 5 分钟），512 条且总共 8 MB |
-| 3 | 联网解析 | 页面声明的 `<link rel="icon">`，兜底再猜 `/favicon.ico` |
-| 4 | 浏览器缓存 | 7 天，URL 带 `?v=<配置 revision>` |
-
-实测（3 个链接、其中一个 host 重复）：启动预热共 6 次上游请求（3 次页面 + 3 次图标）；
-之后连打 5 次 `/api/icon`，上游请求 **0 次**，每次约 2.5 ms。
-
-两个要注意的点：**内存缓存不持久**，所以每次重启都会重新预热一遍；**预热按页面 URL
-去重**，所以同一个 host 上的多个链接会各抓一次（只有第一个会被真正用到）。同时浏览器**一次都不用访问外网**（favicon 走的是这个代理，不是第三方）。CSP 的 `img-src` 是 `'self' data: http: https:`——后面两个是给配置里显式写的
-`icon:` 图片 URL 留的，见下。
-
-> **一个 host 只有一个图标。** 前端的请求是 `/api/icon?h=<host>`，服务端按 host 取配置里
-> **第一个**用它的链接来解析——所以 `nas:8080` 和 `nas:9090` 共用同一个图标。想各自不同，
-> 用链接自己的 `icon:` 字段，或在 `--icon-dir` 里放对应的文件。
->
-> 两个 key 容易混：**本地图标目录**按剥掉端口的主机名找（同上）；**内存缓存**按完整的
-> 页面 URL 记。后者只影响启动预热时的上游流量——同一个 host 上的多个链接会被各抓一遍，
-> 而最终只有第一个会被用到。
-
-> **安全边界**：`/api/icon` 只服务当前配置里出现过的 host，不是一个开放代理。响应另外带 `Content-Security-Policy: default-src 'none'; sandbox`——因为第三方 SVG 从我们自己的 domain 发出去，如果不加这个，直接打开图标 URL 就能执行脚本。
->
-> 允许列表管的是**每一跳**，不只是第一个 URL：页面 HTML 里声明的图标如果指向
-> 别的 host，会被拒绝；302 跳到别的 host 也会被拒绝。代价是**放在 CDN 上的图标不会
-> 被抓取**——这种情况用 `--icon-dir` 放一个本地文件。
-
----
-
-## 服务状态灯
-
-默认**关闭**。关着的时候服务端一个探测请求都不发。
-
-```yaml
-status:
-  enabled: true
-  interval: 60s      # 最小 5s
-  timeout: 5s
-  concurrency: 8     # 最大 64
+```bash
+make cross                                        # 产出 dist/ghome-linux-amd64
+sudo install -m 755 dist/ghome-linux-amd64 /usr/local/bin/ghome
+sudo useradd --system --no-create-home --shell /usr/sbin/nologin ghome
+sudo mkdir -p /etc/ghome
+sudo cp deploy/ghome.env.example /etc/ghome/ghome.env
+sudo chmod 600 /etc/ghome/ghome.env               # 里面有 token
+sudo editor /etc/ghome/ghome.env
+sudo cp deploy/ghome.service /etc/systemd/system/
+sudo systemctl daemon-reload && sudo systemctl enable --now ghome
+journalctl -u ghome -f
 ```
 
-打开之后：
+[`deploy/ghome.service`](deploy/ghome.service) 里带了 `MemoryMax=96M`、`ProtectSystem=strict`、`NoNewPrivileges` 等一整套加固，以及 `StateDirectory=ghome`（缓存文件要写这里，`ProtectSystem=strict` 下只有这个目录可写）。
 
-- 每个可探测的链接右侧出现状态点：绿=在线，红=无法访问（带呼吸动画），灰=未知。
-- 右上角出现胶囊 "10/12 在线"，点它**只看异常的服务**（再点恢复）。
-- 只探测 `http`/`https` 链接；`mailto:`、`ssh:`、`vscode:` 这类没有"在线"概念，不给它们挂点。
-- 单个链接可以退出探测：`probe: false`。
+### Docker
 
-判定口径（这是有意的取舍）：`2xx`/`3xx`/`401`/`403` 都算**在线**——返回 401 说明服务活着，只是要登录；`5xx`、其他 `4xx`、超时、连不上算**无法访问**。先发 `HEAD`，遇到 `405`/`501` 等情况自动退回 `GET`（只读几 KB 就断开）。
+镜像分两阶段：`golang:alpine` 编译，然后只把**静态二进制 + CA 证书**拷进
+`scratch`。最终镜像约 7 MB，没有 shell、没有包管理器、没有 libc——没东西可利用，
+也没东西需要打补丁；以非 root（`65534`）运行。
 
-探测在独立 goroutine 里按自己的节奏跑，跟配置轮询互不影响；结果变化时才通过 SSE 推给浏览器（所以状态灯更新是即时的，而且安静的时候不产生任何事件）。改 `interval`/`timeout`/`concurrency` 会重建探测器（已有的探测结果会被丢弃），改别的不会——避免为了改一个标题把已有的探测结果丢掉。
+```bash
+make docker            # = docker build --build-arg VERSION=$(git describe ...) -t ghome .
+
+docker run -d --name ghome \
+  --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  -v ghome-data:/data \
+  -e GHOME_SOURCE=forgejo \
+  -e GHOME_FORGE_URL=https://git.example.com \
+  -e GHOME_FORGE_OWNER=your-name -e GHOME_FORGE_REPO=homepage \
+  -e GHOME_FORGE_TOKEN=... \
+  -e GHOME_WEBHOOK_SECRET=... \
+  ghome
+```
+
+镜像自带的默认参数是 `--listen=:8080 --cache-file=/data/cache.yaml`，所以上面
+不用重复写。
+
+> **坑一：给 `docker run` 传任何参数会整体替换掉这些默认值。**
+> `docker run ghome --source=file` 会丢掉 `--listen`，容器起来就不监听
+> 任何端口。要覆盖就写全：
+> `docker run -p 8080:8080 ghome --listen=:8080 --cache-file=/data/cache.yaml --source=file`
+
+> **坑二：优先用环境变量，别用命令行参数。**
+> 镜像的 `HEALTHCHECK` 跑的是 `/ghome --healthcheck`，它**不继承**你的 CMD
+> 参数，只读环境变量。所以如果你用 `--listen=:9000` 或 `--base-path=/nav`
+> 这样的参数去改地址，健康检查仍会去探默认的 `:8080/healthz`，结果永远是
+> 不健康。用 `GHOME_LISTEN` / `GHOME_BASE_PATH` 就没有这个问题，而这也正是
+> 十二要素应用的推荐姿势。
+
+#### Compose（可选）
+
+见 [`deploy/docker-compose.example.yml`](deploy/docker-compose.example.yml)：
+
+```bash
+cp deploy/ghome.env.example deploy/ghome.env   # 填 forge 设置和密钥
+docker compose -f deploy/docker-compose.example.yml up -d --build
+```
+
+#### 健康检查
+
+`scratch` 里没有 curl 也没有 shell，所以镜像的 `HEALTHCHECK`
+调的是二进制自己：`ghome --healthcheck` 去请求 `/healthz`，
+**只有 HTTP 200 才算健康**。503（进程活着但配置还没加载出来）会被判为不健康——
+那正是重启该解决的问题，而单纯探端口会把它当成正常。
+
+你也可以手动用：
+
+```bash
+docker run --rm ghome --healthcheck          # 用默认 listen 地址
+docker exec ghome /ghome --healthcheck       # 容器里查自己
+```
+
+#### 卷
+
+`/data` 是给 `--cache-file` 的，挂上之后重启期间哪怕 forge 连不上也还能
+服务上一版页面。`--web-dir` / `--icon-dir` 需要把宿主目录以只读挂进去
+（`-v ./web:/srv/web:ro -e GHOME_WEB_DIR=/srv/web`），注意容器里的进程是 uid
+`65534`，宿主目录得给它读权限。
+
+#### 构建时的 WARNING
+
+如果你构建时看到这条，它无害——构建会成功，镜像也能用：
+
+```text
+WARNING: current commit information was not captured by the build: failed to read
+current commit information with git rev-parse --is-inside-work-tree
+```
+
+但它有几个容易搞错的点，我第一版就写错了两处，所以值得讲清楚。
+
+它**不是** `.dockerignore` 引起的。buildx 在 `build/git.go` 里判断的是：
+
+```go
+if !gitc.IsInsideWorkTree(ctx) {
+    if st, err := os.Stat(path.Join(wd, ".git")); err == nil && st.IsDir() {
+        return nil, errors.New("failed to read current commit information with git rev-parse --is-inside-work-tree")
+    }
+    return nil, nil      // 没有 .git 就静默跳过，不报警
+}
+```
+
+`wd` 是**宿主上你传给 `docker build` 的那个上下文目录**，`os.Stat` 跑在宿主上。
+`.dockerignore` 只影响送进 builder 的内容，管不到这个判断。
+
+所以触发条件是：**`.git` 在，但 git 在那个目录里拒绝把它认作工作树**。
+这是个 git 问题，不是 Docker 问题。
+
+**最常见的成因：git clone 用普通用户，构建用 root。**
+
+```console
+$ git clone https://github.com/vrocwang/ghome.git   # 文件属于普通用户
+$ sudo docker build -t ghome .                       # 进程是 root
+```
+
+仓库属主和构建用户不一致，git 的 dubious ownership 检查（CVE-2022-24765 的
+缓解措施）就会拒绝，于是 buildx 打那条警告。三个选择，按推荐顺序：
+
+**1. 别用 root 构建**（真正的修法，根因是混用了两个用户）
+
+```bash
+# Linux：把你自己加进 docker 组，然后重新登录
+sudo usermod -aG docker "$USER"
+
+# macOS + Docker Desktop：本来就不需要 sudo，去掉它即可
+docker build -t ghome .
+```
+
+**2. 告诉 root 的 git 这个目录是安全的**（workaround，顺带把 git 元数据也补上）
+
+```bash
+sudo git config --global --add safe.directory "$PWD"
+```
+
+注意这是写进 **root 的** `~/.gitconfig`，因为跑 git 的是 root。
+
+先在上下文目录里自己复现一次，能直接看到真实原因：
+
+```bash
+git rev-parse --is-inside-work-tree
+git status        # 上一条失败时，这条会说清为什么
+# → fatal: detected dubious ownership in repository at '...'
+```
+
+**3. 让 buildx 干脆别查**（版本号不受影响，见下）
+
+`build/git.go` 开头有 `if !setGitLabels && !setGitInfo { return nil, nil }`，
+而 `setGitInfo` 默认 `true`，用 `BUILDX_GIT_INFO=false` 即可跳过整趟查询。
+`make docker` 已经这么设了——变量是在 Makefile 的 recipe 里设的，所以
+`sudo make docker` 也照样生效：
+
+```bash
+make docker          # 或 sudo make docker
+```
+
+之所以设它不心虚：版本号和 revision 是 Dockerfile 用 `--build-arg` 显式传进去的，
+buildx 那套自动推断对这个项目本来就是多余的。
+
+顺带说一下版本号：Dockerfile 用 `--build-arg VERSION` 显式注入 `-ldflags
+"-X main.version=..."`，所以镜像里 `ghome --version` 和 `/healthz` 的 `version`
+字段报的是真实版本，不是 `dev`。不传的话就是 `dev`。
+
+#### 多架构
+
+Dockerfile 用 `--platform=$BUILDPLATFORM` 让编译器保持宿主架构，
+所以交叉编译而不是模拟：
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t ghome --push .
+```
+
+普通 `docker build` 也照常工作（`GOOS`/`GOARCH` 为空时 Go 回退到宿主）。
+
+#### 这些参数在 Docker 里怎么给
+
+这是个容易卡住的地方：21 个 flag 在容器里**分三类**，给法不一样。
+
+| 类型 | 有哪些 | 怎么给 |
+| --- | --- | --- |
+| **设置** | 18 个：`--listen` `--source` `--file` `--forge-*`（6 个）`--poll` `--webhook-secret` `--branch` `--admin-token` `--base-path` `--cache-file` `--web-dir` `--icon-dir` `--log-level` | 环境变量，写进 `ghome.env`，compose 用 `env_file` 引入 |
+| **需要宿主目录** | `--web-dir`、`--icon-dir` | 环境变量 **+ 只读卷**，两半必须指向同一个容器内路径 |
+| **一次性动作** | `--dump-web`、`--healthcheck`、`--version` | 直接当命令参数——它们是动作不是配置，所以**没有环境变量** |
+
+完整对照见上面的[命令行与环境变量](#命令行与环境变量)表；`deploy/ghome.env.example`
+里每一项都写好了，包括被注释掉的可选项。
+
+**需要挂目录的两个**，两半必须成对：
+
+```yaml
+environment:
+  GHOME_ICON_DIR: /srv/icons
+volumes:
+  - ./icons:/srv/icons:ro
+```
+
+容器里的进程是 uid **65534**，所以宿主目录得给它读权限（一般 0755 就行）。
+`--icon-dir` 用不了时启动会打一条明确的 WARNING，不会静默失效。
+
+**`--dump-web` 是一条命令，不是配置**：
+
+```bash
+docker run --rm -u "$(id -u):$(id -g)" \
+  -v "$PWD/web:/out" ghome --dump-web=/out
+```
+
+`-u` 是关键：镜像默认 uid 65534，而 bind mount 属于你，不换 uid 会直接
+`permission denied`（实测的报错就是 `mkdir /out/assets: permission denied`）。
+`ghome` 里的 `--web-dir` 是**逐文件回退**的，所以导出后只需要改你想改的那个文件，
+删掉的文件继续跟着二进制走。
+
+**`--healthcheck` 由镜像的 HEALTHCHECK 自己调用**，正常情况下你不用管。要在
+compose 里覆盖，注意它**不继承 CMD 参数、只读环境变量**（上面那个坑二）：
+
+```yaml
+healthcheck:
+  test: ["CMD", "/ghome", "--healthcheck"]
+```
+
+**不用 Docker 也行。** `make cross` 产出的就是同一个静态二进制，`scp` 上服务器
+直接跑，连容器运行时都省了——这是这个项目在低配机器上的默认姿势。
+
+### nginx 反代
+
+见 [`deploy/nginx.conf.example`](deploy/nginx.conf.example)。**最关键的两行是 `proxy_buffering off;` 和 `proxy_read_timeout 1h;`**——不关缓冲，SSE 会成块到达，实时更新看起来就像坏了。
+
+#### 加了密码（auth_basic）之后
+
+**UI 和实时更新不受影响，但 webhook 会被打断。** 拿真实反代实测过：
+
+| 链路 | 加了 Basic 之后 |
+| --- | --- |
+| 浏览器打开页面、`/api/nav`、`/theme.css`、图标 | ✓ 正常 |
+| **SSE 实时更新**（`/api/events`） | ✓ 正常，实测 1.5s 到达且页面未重载 |
+| **Gitea/Forgejo 的 webhook** | ✗ **401**，请求根本到不了 ghome |
+| Docker 的 `HEALTHCHECK` | ✓ 不受影响（它探的是容器内的 ghome，不经代理） |
+
+浏览器只会在整页加载时收到**一次**认证挑战，之后把凭据复用到所有后续请求上——
+包括 SSE 长连接和图标，所以 UI 侧不用管。
+
+webhook 是唯一的例外：**forge 不会输密码**。所以受保护的 `/api/webhook` 会把 401
+返回给 forge，秒级更新静默死掉，退化成轮询（页面照样更新，只是最多晚一分钟）。
+这个"静默"正是它危险的地方。
+
+**修法是豁免这一条路径**，而不是给它配密码：
+
+```nginx
+location = /api/webhook {
+    auth_basic off;
+    proxy_pass http://ghome;
+    # ...
+}
+```
+
+这么做不削弱安全性：**HMAC 密钥才是这个接口真正的鉴权**（没配
+`--webhook-secret` 时它直接返回 403 不工作），实测错误签名仍然被 ghome 拒成 401。
+想再加一层的话，用来源 IP 限制比用一个 forge 发不出的密码更合适。
+
+另外 `/api/refresh` 有个坑：nginx 的 Basic 和 ghome 的 admin token **都用
+`Authorization` 头**，一个头装不下两个值。走代理时改用 `X-Ghome-Token`：
+
+```bash
+curl -u user:pass -H "X-Ghome-Token: $GHOME_ADMIN_TOKEN" -X POST https://nav.example.com/api/refresh
+```
+
+（`Authorization: Bearer ...` 在直连时正常，经 Basic 代理时会被代理当成 Basic 凭据而失败。）
+
+### 交叉编译
+
+```bash
+make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
+```
+
+全部静态链接（`file` 会告诉你 `statically linked`），拷到服务器上直接跑。
+
+### 关于"配置托管在 git"的两种放法
+
+| 模式 | 命令 | 适用 |
+| --- | --- | --- |
+| **API 直读**（推荐） | `--source=gitea` | 不需要 git 二进制、不占磁盘；token 只读；`custom.css` 也一起拉 |
+| **本地文件** | `--source=file --file=/srv/nav/nav.yaml` | 你已经有别的机制把仓同步到机器上了（cron `git pull`、CI、rsync）；`custom.css` 从同目录读 |
+
+文件模式下想让 push 也秒级生效，就在 webhook 里加一句 `git -C /srv/nav pull`；或者给 ghome 加 `--admin-token`，pull 完 `curl -X POST -H "Authorization: Bearer $TOKEN" .../api/refresh`。
 
 ---
 
@@ -504,284 +607,204 @@ ignored unknown field (line 17: field titel not found in type nav.Config)
 **推了坏配置会怎样？** 结构性问题：页面继续显示上一版好配置（用户无感），
 `/healthz` 变成 `degraded`；改好再 push 就自动恢复，不需要重启，回滚也只需要
 `git revert`。表面问题：那一项不生效，其余照常更新。
+
 ---
 
-## 部署
+## 改样式不用重新编译
 
-### systemd（推荐）
+这是刻意设计的：**样式是数据，不是代码**。分四层，按你需要改的深度选。
 
-```bash
-make cross                                        # 产出 dist/ghome-linux-amd64
-sudo install -m 755 dist/ghome-linux-amd64 /usr/local/bin/ghome
-sudo useradd --system --no-create-home --shell /usr/sbin/nologin ghome
-sudo mkdir -p /etc/ghome
-sudo cp deploy/ghome.env.example /etc/ghome/ghome.env
-sudo chmod 600 /etc/ghome/ghome.env               # 里面有 token
-sudo editor /etc/ghome/ghome.env
-sudo cp deploy/ghome.service /etc/systemd/system/
-sudo systemctl daemon-reload && sudo systemctl enable --now ghome
-journalctl -u ghome -f
-```
-
-[`deploy/ghome.service`](deploy/ghome.service) 里带了 `MemoryMax=96M`、`ProtectSystem=strict`、`NoNewPrivileges` 等一整套加固，以及 `StateDirectory=ghome`（缓存文件要写这里，`ProtectSystem=strict` 下只有这个目录可写）。
-
-### Docker
-
-镜像分两阶段：`golang:alpine` 编译，然后只把**静态二进制 + CA 证书**拷进
-`scratch`。最终镜像约 7 MB，没有 shell、没有包管理器、没有 libc——没东西可利用，
-也没东西需要打补丁；以非 root（`65534`）运行。
-
-```bash
-make docker            # = docker build --build-arg VERSION=$(git describe ...) -t ghome .
-
-docker run -d --name ghome \
-  --restart unless-stopped \
-  -p 127.0.0.1:8080:8080 \
-  -v ghome-data:/data \
-  -e GHOME_SOURCE=forgejo \
-  -e GHOME_FORGE_URL=https://git.example.com \
-  -e GHOME_FORGE_OWNER=your-name -e GHOME_FORGE_REPO=homepage \
-  -e GHOME_FORGE_TOKEN=... \
-  -e GHOME_WEBHOOK_SECRET=... \
-  ghome
-```
-
-镜像自带的默认参数是 `--listen=:8080 --cache-file=/data/cache.yaml`，所以上面
-不用重复写。
-
-> **坑一：给 `docker run` 传任何参数会整体替换掉这些默认值。**
-> `docker run ghome --source=file` 会丢掉 `--listen`，容器起来就不监听
-> 任何端口。要覆盖就写全：
-> `docker run -p 8080:8080 ghome --listen=:8080 --cache-file=/data/cache.yaml --source=file`
-
-> **坑二：优先用环境变量，别用命令行参数。**
-> 镜像的 `HEALTHCHECK` 跑的是 `/ghome --healthcheck`，它**不继承**你的 CMD
-> 参数，只读环境变量。所以如果你用 `--listen=:9000` 或 `--base-path=/nav`
-> 这样的参数去改地址，健康检查仍会去探默认的 `:8080/healthz`，结果永远是
-> 不健康。用 `GHOME_LISTEN` / `GHOME_BASE_PATH` 就没有这个问题，而这也正是
-> 十二要素应用的推荐姿势。
-
-**Compose** 见 [`deploy/docker-compose.example.yml`](deploy/docker-compose.example.yml)：
-
-```bash
-cp deploy/ghome.env.example deploy/ghome.env   # 填 forge 设置和密钥
-docker compose -f deploy/docker-compose.example.yml up -d --build
-```
-
-**健康检查。** `scratch` 里没有 curl 也没有 shell，所以镜像的 `HEALTHCHECK`
-调的是二进制自己：`ghome --healthcheck` 去请求 `/healthz`，
-**只有 HTTP 200 才算健康**。503（进程活着但配置还没加载出来）会被判为不健康——
-那正是重启该解决的问题，而单纯探端口会把它当成正常。
-
-你也可以手动用：
-
-```bash
-docker run --rm ghome --healthcheck          # 用默认 listen 地址
-docker exec ghome /ghome --healthcheck       # 容器里查自己
-```
-
-**卷。** `/data` 是给 `--cache-file` 的，挂上之后重启期间哪怕 forge 连不上也还能
-服务上一版页面。`--web-dir` / `--icon-dir` 需要把宿主目录以只读挂进去
-（`-v ./web:/srv/web:ro -e GHOME_WEB_DIR=/srv/web`），注意容器里的进程是 uid
-`65534`，宿主目录得给它读权限。
-
-**关于 `WARNING: current commit information was not captured by the build`。**
-
-这条警告无害：构建会成功，镜像也能用。但它有几个容易搞错的点，我第一版
-就写错了两处，所以值得讲清楚。
-
-它**不是** `.dockerignore` 引起的。buildx 在 `build/git.go` 里判断的是：
-
-```go
-if !gitc.IsInsideWorkTree(ctx) {
-    if st, err := os.Stat(path.Join(wd, ".git")); err == nil && st.IsDir() {
-        return nil, errors.New("failed to read current commit information with git rev-parse --is-inside-work-tree")
-    }
-    return nil, nil      // 没有 .git 就静默跳过，不报警
-}
-```
-
-`wd` 是**宿主上你传给 `docker build` 的那个上下文目录**，`os.Stat` 跑在宿主上。
-`.dockerignore` 只影响送进 builder 的内容，管不到这个判断。
-
-所以触发条件是：**`.git` 在，但 git 在那个目录里拒绝把它认作工作树**。
-这是个 git 问题，不是 Docker 问题。
-
-**最常见的成因：git clone 用普通用户，构建用 root。**
-
-```console
-$ git clone https://github.com/vrocwang/ghome.git   # 文件属于普通用户
-$ sudo docker build -t ghome .                       # 进程是 root
-```
-
-仓库属主和构建用户不一致，git 的 dubious ownership 检查（CVE-2022-24765 的
-缓解措施）就会拒绝，于是 buildx 打那条警告。三个选择，按推荐顺序：
-
-**1. 别用 root 构建**（真正的修法，根因是混用了两个用户）
-
-```bash
-# Linux：把你自己加进 docker 组，然后重新登录
-sudo usermod -aG docker "$USER"
-
-# macOS + Docker Desktop：本来就不需要 sudo，去掉它即可
-docker build -t ghome .
-```
-
-**2. 告诉 root 的 git 这个目录是安全的**（workaround，顺带把 git 元数据也补上）
-
-```bash
-sudo git config --global --add safe.directory "$PWD"
-```
-
-注意这是写进 **root 的** `~/.gitconfig`，因为跑 git 的是 root。
-
-先在上下文目录里自己复现一次，能直接看到真实原因：
-
-```bash
-git rev-parse --is-inside-work-tree
-git status        # 上一条失败时，这条会说清为什么
-# → fatal: detected dubious ownership in repository at '...'
-```
-
-**3. 让 buildx 干脆别查**（版本号不受影响，见下）
-
-`build/git.go` 开头有 `if !setGitLabels && !setGitInfo { return nil, nil }`，
-而 `setGitInfo` 默认 `true`，用 `BUILDX_GIT_INFO=false` 即可跳过整趟查询。
-`make docker` 已经这么设了——变量是在 Makefile 的 recipe 里设的，所以
-`sudo make docker` 也照样生效：
-
-```bash
-make docker          # 或 sudo make docker
-```
-
-之所以设它不心虚：版本号和 revision 是 Dockerfile 用 `--build-arg` 显式传进去的，
-buildx 那套自动推断对这个项目本来就是多余的。
-
-顺带说一下版本号：Dockerfile 用 `--build-arg VERSION` 显式注入 `-ldflags
-"-X main.version=..."`，所以镜像里 `ghome --version` 和 `/healthz` 的 `version`
-字段报的是真实版本，不是 `dev`。不传的话就是 `dev`。
-
-**多架构。** Dockerfile 用 `--platform=$BUILDPLATFORM` 让编译器保持宿主架构，
-所以交叉编译而不是模拟：
-
-```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t ghome --push .
-```
-
-普通 `docker build` 也照常工作（`GOOS`/`GOARCH` 为空时 Go 回退到宿主）。
-
-**不用 Docker 也行。** `make cross` 产出的就是同一个静态二进制，`scp` 上服务器
-直接跑，连容器运行时都省了——这是这个项目在低配机器上的默认姿势。
-
-#### 这些参数在 Docker 里怎么给
-
-这是个容易卡住的地方：21 个 flag 在容器里**分三类**，给法不一样。
-
-| 类型 | 有哪些 | 怎么给 |
-| --- | --- | --- |
-| **设置** | 18 个：`--listen` `--source` `--file` `--forge-*`（6 个）`--poll` `--webhook-secret` `--branch` `--admin-token` `--base-path` `--cache-file` `--web-dir` `--icon-dir` `--log-level` | 环境变量，写进 `ghome.env`，compose 用 `env_file` 引入 |
-| **需要宿主目录** | `--web-dir`、`--icon-dir` | 环境变量 **+ 只读卷**，两半必须指向同一个容器内路径 |
-| **一次性动作** | `--dump-web`、`--healthcheck`、`--version` | 直接当命令参数——它们是动作不是配置，所以**没有环境变量** |
-
-完整对照见上面的[命令行与环境变量](#命令行与环境变量)表；`deploy/ghome.env.example`
-里每一项都写好了，包括被注释掉的可选项。
-
-**需要挂目录的两个**，两半必须成对：
+### 第 1 层：`nav.yaml` 里的 `style:` 令牌（覆盖 90% 的需求）
 
 ```yaml
-environment:
-  GHOME_ICON_DIR: /srv/icons
-volumes:
-  - ./icons:/srv/icons:ro
+style:
+  accent: "#7c3aed"       # 主色
+  background: "#faf9ff"   # 页面底色
+  surface: "#ffffff"      # 卡片底色
+  text: "#1a1a1f"
+  muted: "#6b6b78"
+  border: "#e8e6f0"
+  font: "Inter, system-ui, sans-serif"
+  radius: 20              # 圆角
+  fontSize: 15            # 正文字号
+  width: 1280             # 内容最大宽度
+  iconSize: 22            # 图标尺寸
+  density: compact        # comfortable | compact
+  cardStyle: strong       # soft | flat | strong
 ```
 
-容器里的进程是 uid **65534**，所以宿主目录得给它读权限（一般 0755 就行）。
-`--icon-dir` 用不了时启动会打一条明确的 WARNING，不会静默失效。
+这些令牌由 `/theme.css` 以 CSS 变量发给浏览器，页面所有颜色、间距、圆角都从它们派生（渐变和悬停色用 `color-mix()` 算出来），所以改一个 `accent` 整页都跟着变。
 
-**`--dump-web` 是一条命令，不是配置**：
+**改完 push 就生效**，包括已经开着的页面——浏览器收到 SSE 事件后会带着新版本号重新拉 `theme.css`。
 
-```bash
-docker run --rm -u "$(id -u):$(id -g)" \
-  -v "$PWD/web:/out" ghome --dump-web=/out
-```
+写错了不会让页面挂掉：颜色只接受 `#hex` / `rgb()` / `hsl()` / 颜色关键字，字号必须在 `11~24`，越界的值会被忽略并在页面顶部提示。这条限制是有意的——`style` 的值会直接进 CSS，不校验就等于开了一个注入点。
 
-`-u` 是关键：镜像默认 uid 65534，而 bind mount 属于你，不换 uid 会直接
-`permission denied`（实测的报错就是 `mkdir /out/assets: permission denied`）。
-`ghome` 里的 `--web-dir` 是**逐文件回退**的，所以导出后只需要改你想改的那个文件，
-删掉的文件继续跟着二进制走。
+### 第 2 层：`custom.css`（想写具体规则时）
 
-**`--healthcheck` 由镜像的 HEALTHCHECK 自己调用**，正常情况下你不用管。要在
-compose 里覆盖，注意它**不继承 CMD 参数、只读环境变量**（上面那个坑二）：
+在**同一个仓库**里放一个样式表，然后指过去：
 
 ```yaml
-healthcheck:
-  test: ["CMD", "/ghome", "--healthcheck"]
+style:
+  customCss: "custom.css"
 ```
 
-**不用 Docker 也行。** `make cross` 产出的就是同一个静态二进制，`scp` 上服务器
-直接跑，连容器运行时都省了——这是这个项目在低配机器上的默认姿势。
+它的内容会被追加到 `/theme.css` 后面，也就是内嵌样式表和所有令牌**之后**，所以天然优先级更高。改它同样只需要 push。
 
-### nginx 反代
+**只改 `custom.css`、不动 `nav.yaml` 也能热更新**，这一点值得说明，因为它踩了一个坑：`nav.yaml` 的修订号在这种情况下不会变，如果浏览器拿它当"要不要重新拉样式表"的依据，页面就会一直显示旧样式直到有人手动刷新。所以 `/api/nav` 的 `meta` 里有两个 revision：
 
-见 [`deploy/nginx.conf.example`](deploy/nginx.conf.example)。**最关键的两行是 `proxy_buffering off;` 和 `proxy_read_timeout 1h;`**——不关缓冲，SSE 会成块到达，实时更新看起来就像坏了。
-
-#### 加了密码（auth_basic）之后
-
-**UI 和实时更新不受影响，但 webhook 会被打断。** 拿真实反代实测过：
-
-| 链路 | 加了 Basic 之后 |
-| --- | --- |
-| 浏览器打开页面、`/api/nav`、`/theme.css`、图标 | ✓ 正常 |
-| **SSE 实时更新**（`/api/events`） | ✓ 正常，实测 1.5s 到达且页面未重载 |
-| **Gitea/Forgejo 的 webhook** | ✗ **401**，请求根本到不了 ghome |
-| Docker 的 `HEALTHCHECK` | ✓ 不受影响（它探的是容器内的 ghome，不经代理） |
-
-浏览器只会在整页加载时收到**一次**认证挑战，之后把凭据复用到所有后续请求上——
-包括 SSE 长连接和图标，所以 UI 侧不用管。
-
-webhook 是唯一的例外：**forge 不会输密码**。所以受保护的 `/api/webhook` 会把 401
-返回给 forge，秒级更新静默死掉，退化成轮询（页面照样更新，只是最多晚一分钟）。
-这个"静默"正是它危险的地方。
-
-**修法是豁免这一条路径**，而不是给它配密码：
-
-```nginx
-location = /api/webhook {
-    auth_basic off;
-    proxy_pass http://ghome;
-    # ...
-}
-```
-
-这么做不削弱安全性：**HMAC 密钥才是这个接口真正的鉴权**（没配
-`--webhook-secret` 时它直接返回 403 不工作），实测错误签名仍然被 ghome 拒成 401。
-想再加一层的话，用来源 IP 限制比用一个 forge 发不出的密码更合适。
-
-另外 `/api/refresh` 有个坑：nginx 的 Basic 和 ghome 的 admin token **都用
-`Authorization` 头**，一个头装不下两个值。走代理时改用 `X-Ghome-Token`：
-
-```bash
-curl -u user:pass -H "X-Ghome-Token: $GHOME_ADMIN_TOKEN" -X POST https://nav.example.com/api/refresh
-```
-
-（`Authorization: Bearer ...` 在直连时正常，经 Basic 代理时会被代理当成 Basic 凭据而失败。）
-
-### 交叉编译
-
-```bash
-make cross   # linux/amd64, linux/arm64, darwin/arm64, darwin/amd64 → dist/
-```
-
-全部静态链接（`file` 会告诉你 `statically linked`），拷到服务器上直接跑。
-
-### 关于"配置托管在 git"的两种放法
-
-| 模式 | 命令 | 适用 |
+| 字段 | 是什么 | 变了代表 |
 | --- | --- | --- |
-| **API 直读**（推荐） | `--source=gitea` | 不需要 git 二进制、不占磁盘；token 只读；`custom.css` 也一起拉 |
-| **本地文件** | `--source=file --file=/srv/nav/nav.yaml` | 你已经有别的机制把仓同步到机器上了（cron `git pull`、CI、rsync）；`custom.css` 从同目录读 |
+| `revision` | forge 模式下是 `nav.yaml` 的 git blob SHA；文件模式下是内容的 sha256 | 配置内容变了 |
+| `themeRevision` | 覆盖**两份文件**的短哈希 | 配置**或**样式表变了 |
 
-文件模式下想让 push 也秒级生效，就在 webhook 里加一句 `git -C /srv/nav pull`；或者给 ghome 加 `--admin-token`，pull 完 `curl -X POST -H "Authorization: Bearer $TOKEN" .../api/refresh`。
+浏览器用 `themeRevision` 决定要不要重新拉 `/theme.css`（它同时是 cache buster），用 `revision` 决定要不要重绘整个页面。两者由服务端在同一个原子操作里发布，所以不存在"样式更新了但配置还是旧的"这种中间态。
+
+`/healthz` 里两个值都能看到，出问题时直接在终端确认。
+
+起点见 [`custom.css.example`](custom.css.example)，里面列了所有可用变量。适合：内嵌样式表没暴露成令牌的细节、给某个分组单独开小灶、加一层纯 CSS 装饰。
+
+### 第 3 层：`--dump-web` + `--web-dir`（要动 DOM 结构或基础样式表时）
+
+```bash
+ghome --dump-web=/srv/ghome/web          # 把内嵌前端导出来
+vim /srv/ghome/web/assets/style.css      # 随便改
+ghome --web-dir=/srv/ghome/web ...       # 指过去
+```
+
+**逐文件回退**：`--web-dir` 里有就用磁盘上的，没有就用内嵌的。所以你只需要放想改的那一个文件——上面导出的目录里删掉 `app.js`，`app.js` 就继续跟着二进制走；升级 ghome 时没被覆盖的文件自动跟着更新。
+
+`--dump-web` 的意思是"给我一份能跑的当前版本当起点"，不用你凭空建目录、猜文件名。
+
+### 第 4 层：改 Go 代码
+
+只有要加全新视图或新交互时才需要。到这一层 `internal/server/web/` 下的文件就是源码。
+
+**样式为什么当初要内嵌？** 因为单文件部署意味着不存在"CSS 和二进制版本对不上"、"文件缺失"、"权限不对"、"只传了一半"这类故障，也不存在升级时忘记替换某个资源。这个价值我不想丢——所以做法是**保留内嵌作为默认，把可改的部分变成数据**，而不是把前端拆出去。
+
+---
+
+## 三套布局
+
+在 `nav.yaml` 里改一行，push 就换：
+
+```yaml
+layout: grid        # 精致卡片（默认）：每组一张卡，描述和标签都显示
+layout: dashboard   # 紧凑密集：行高更小、分组带色条、隐藏描述，服务多时用
+layout: list        # 单列：每组一行，链接横向排成芯片，最省纵向空间
+```
+
+三套布局共用同一份内容，只是密度和呈现方式不同：
+
+**grid**（默认）——每组一张卡，描述和标签都显示：
+
+![grid 布局](docs/layout-grid.png)
+
+**dashboard**——紧凑密集，分组带顶部色条，服务多时用：
+
+![dashboard 布局](docs/layout-dashboard.png)
+
+**list**——每组一行，链接横向排成芯片，最省纵向空间：
+
+![list 布局](docs/layout-list.png)
+
+| | grid | dashboard | list |
+| --- | --- | --- | --- |
+| 卡片列宽 | ≥320px | ≥262px | 单列 |
+| 链接描述 | 显示 | 隐藏 | 隐藏 |
+| 分组色条 | 图标底 + 悬停描边 | 顶部渐变条 | 图标底 |
+| 适合 | 十几到几十个入口 | 上百个入口 | 每组的链接都很短 |
+
+不管你选哪套，页面上的能力都一样：搜索过滤、`↑`/`↓` 选择、`Enter` 打开、每个链接的 `hotkey`、置顶区、状态灯、分组配色。
+
+**置顶**：`pinned: true` 的链接会被提升到页面顶部的置顶区，**并且不再出现在它所属的分组里**（避免同一个入口出现两次）。如果某个分组因此变空，该分组会被隐藏。
+
+**分组配色**：给分组一个 `color`，它的图标底和卡片悬停描边就会带上这个色；dashboard 布局下还会变成顶部色条。
+
+---
+
+## 服务状态灯
+
+默认**关闭**。关着的时候服务端一个探测请求都不发。
+
+```yaml
+status:
+  enabled: true
+  interval: 60s      # 最小 5s
+  timeout: 5s
+  concurrency: 8     # 最大 64
+```
+
+打开之后：
+
+- 每个可探测的链接右侧出现状态点：绿=在线，红=无法访问（带呼吸动画），灰=未知。
+- 右上角出现胶囊 "10/12 在线"，点它**只看异常的服务**（再点恢复）。
+- 只探测 `http`/`https` 链接；`mailto:`、`ssh:`、`vscode:` 这类没有"在线"概念，不给它们挂点。
+- 单个链接可以退出探测：`probe: false`。
+
+判定口径（这是有意的取舍）：`2xx`/`3xx`/`401`/`403` 都算**在线**——返回 401 说明服务活着，只是要登录；`5xx`、其他 `4xx`、超时、连不上算**无法访问**。先发 `HEAD`，遇到 `405`/`501` 等情况自动退回 `GET`（只读几 KB 就断开）。
+
+探测在独立 goroutine 里按自己的节奏跑，跟配置轮询互不影响；结果变化时才通过 SSE 推给浏览器（所以状态灯更新是即时的，而且安静的时候不产生任何事件）。改 `interval`/`timeout`/`concurrency` 会重建探测器（已有的探测结果会被丢弃），改别的不会——避免为了改一个标题把已有的探测结果丢掉。
+
+---
+
+## 图标是怎么来的
+
+页面不再让浏览器直接去第三方站点取 `favicon.ico`，而是走 **`/api/icon?h=<host>`**，由服务端解析和缓存：
+
+1. **本地图标目录**（`--icon-dir`）优先，命中就完全不联网——也不查缓存。文件名是 `<host>` 加扩展名，扩展名按 `.svg` → `.png` → `.ico` → `.webp` → `.jpg` → `.jpeg` 的顺序找，第一个存在的生效。host 取链接 URL 的主机名，**已转小写并剥掉端口**，所以 `http://nas:8080` 和 `http://nas:9090` 都找 `nas.svg`。
+
+   ```bash
+   ghome --icon-dir=/var/lib/ghome/icons
+   ```
+
+   ```
+   /var/lib/ghome/icons/
+   ├── git.internal.svg      # 给 https://git.internal/
+   ├── nas.png               # 给 http://nas:8080/ 和 http://nas:9090/
+   └── grafana.internal.svg
+   ```
+
+   这一条是内网服务的**可靠解**：它们大多没有 favicon，DNS 也可能根本解析不了，而本地文件不需要网络也不需要 DNS。实测对解析不了的 host 响应耗时 0.4ms（走文件系统），而联网解析会超时。文件超过 512KB 会被忽略（然后照常回退到联网解析）。
+
+   解析顺序里它排在**缓存之前**，所以放进一个文件立刻生效，不用等缓存过期；反过来，删掉一个文件也会立刻回退到联网结果。
+2. 否则抓页面 HTML，解析 `<link rel="icon">`（含 `shortcut icon` / `apple-touch-icon` / `mask-icon`），会跟随 `<base href>` 解析相对路径；有多个就取 `sizes` 最大的。
+3. 没有 `<link>` 就退到 `<host>/favicon.ico`。
+4. 校验返回的确实是图片（看 `Content-Type`，可疑时用前 512 字节嗅探），否则算失败。
+5. 结果进 LRU 缓存（默认 512 条 **且** 总共 8 MB，24 小时过期；失败结果缓存 5 分钟，
+   避免对一个挂掉的站点反复重试）。两个上限都要满足：只限条数的话，512 × 512KB
+   最坏是 256 MB。
+
+这样解决的几件事：用 Vite/Next 打包的站点图标是 `/assets/icon-a1b2c3.svg` 这种哈希名，根目录必然 404；内网服务大多根本没有 favicon；解析不到时前端回退到字母头像。
+
+**所以不是每次访问都去抓。** 一次图标的实际代价按这个顺序被拦住：
+
+| 顺序 | 拦在哪 | 说明 |
+| --- | --- | --- |
+| 1 | `--icon-dir` 本地文件 | 命中就**完全不联网**，也不查缓存 |
+| 2 | 服务端内存缓存 | 24 小时（失败结果 5 分钟），512 条且总共 8 MB |
+| 3 | 联网解析 | 页面声明的 `<link rel="icon">`，兜底再猜 `/favicon.ico` |
+| 4 | 浏览器缓存 | 7 天，URL 带 `?v=<配置 revision>` |
+
+实测（3 个链接、其中一个 host 重复）：启动预热共 6 次上游请求（3 次页面 + 3 次图标）；
+之后连打 5 次 `/api/icon`，上游请求 **0 次**，每次约 2.5 ms。
+
+两个要注意的点：**内存缓存不持久**，所以每次重启都会重新预热一遍；**预热按页面 URL
+去重**，所以同一个 host 上的多个链接会各抓一次（只有第一个会被真正用到）。同时浏览器**一次都不用访问外网**（favicon 走的是这个代理，不是第三方）。CSP 的 `img-src` 是 `'self' data: http: https:`——后面两个是给配置里显式写的
+`icon:` 图片 URL 留的，见下。
+
+> **一个 host 只有一个图标。** 前端的请求是 `/api/icon?h=<host>`，服务端按 host 取配置里
+> **第一个**用它的链接来解析——所以 `nas:8080` 和 `nas:9090` 共用同一个图标。想各自不同，
+> 用链接自己的 `icon:` 字段，或在 `--icon-dir` 里放对应的文件。
+>
+> 两个 key 容易混：**本地图标目录**按剥掉端口的主机名找（同上）；**内存缓存**按完整的
+> 页面 URL 记。后者只影响启动预热时的上游流量——同一个 host 上的多个链接会被各抓一遍，
+> 而最终只有第一个会被用到。
+
+> **安全边界**：`/api/icon` 只服务当前配置里出现过的 host，不是一个开放代理。响应另外带 `Content-Security-Policy: default-src 'none'; sandbox`——因为第三方 SVG 从我们自己的 domain 发出去，如果不加这个，直接打开图标 URL 就能执行脚本。
+>
+> 允许列表管的是**每一跳**，不只是第一个 URL：页面 HTML 里声明的图标如果指向
+> 别的 host，会被拒绝；302 跳到别的 host 也会被拒绝。代价是**放在 CDN 上的图标不会
+> 被抓取**——这种情况用 `--icon-dir` 放一个本地文件。
 
 ---
 
