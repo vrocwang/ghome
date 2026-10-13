@@ -384,7 +384,8 @@ site:
 
 layout: grid              # grid | dashboard | list
 
-style: { ... }            # 见「改样式不用重新编译」
+# style:                  # 设计令牌，见「改样式不用重新编译」
+#   accent: "#2f9e6f"     # 颜色、圆角、字号、密度都在这儿
 
 search:
   enabled: true           # (true)
