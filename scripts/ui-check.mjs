@@ -200,6 +200,52 @@ try {
     !!titles.configured && titles.rendered === titles.configured,
     `document.title=${JSON.stringify(titles.rendered)} config=${JSON.stringify(titles.configured)}`);
 
+  /* ---------- tags and status lights must match the payload ---------- */
+
+  // Both used to be decided in the browser and got it wrong: only the first two
+  // tags were drawn while the search box matched all of them, and a link the
+  // server never probes (ssh:, mailto:, probe: false) still grew a status light
+  // stuck on "checking". Neither is visible to a Go test, so they are pinned
+  // here, against the same payload the page was given.
+  const linkView = await evaluateAsync(`(async () => {
+    const cfg = await (await fetch('api/nav', { cache: 'no-store' })).json();
+    const rendered = [...document.querySelectorAll('a.link')].map((a) => ({
+      name: a.querySelector('.nm').textContent,
+      tags: a.querySelectorAll('.tag').length,
+      href: a.getAttribute('href'),
+      hasDot: !!a.querySelector('.dot'),
+    }));
+    const links = (cfg.groups || []).flatMap((g) => g.links || []);
+    return {
+      links: links,
+      rendered: rendered,
+      // Pinned entries live in the strip, which never shows tags or a light.
+      tagged: links.filter((l) => l.tags && l.tags.length && !l.pinned)
+        .map((l) => ({ name: l.name, want: l.tags.length })),
+    };
+  })()`);
+
+  const tagMismatch = linkView.tagged
+    .map((t) => {
+      const row = linkView.rendered.find((r) => r.name === t.name);
+      return row && row.tags !== t.want ? `${t.name}: rendered ${row.tags} of ${t.want}` : null;
+    })
+    .filter(Boolean);
+  check('every tag in the config is rendered', tagMismatch.length === 0, tagMismatch.join('; '));
+
+  const dotMismatch = linkView.rendered
+    .map((row) => {
+      const link = linkView.links.find((l) => l.url === row.href);
+      if (!link) return null;
+      // A light only ever appears for a link the server probes, and only when
+      // probing is switched on at all.
+      if (row.hasDot && !link.probeTarget) return `${row.name} has a light but is not probed`;
+      return null;
+    })
+    .filter(Boolean);
+  check('no status light on a link the server never probes',
+    dotMismatch.length === 0, dotMismatch.join('; '));
+
   /* ---------- pinned entries must not be duplicated ---------- */
 
   if (shape.tiles > 0) {
