@@ -53,7 +53,7 @@
 ## 排查用的东西
 
 ```bash
-curl -s localhost:8080/healthz | python3 -m json.tool   # status / revision / lastError / warnings
+curl -s localhost:8080/healthz | python3 -m json.tool   # status / revision / lastError
 journalctl -u ghome -f                                  # config warning、webhook、探测摘要
 curl -sI localhost:8080/theme.css                       # 样式表是否带上了修订号
 ```
@@ -63,4 +63,5 @@ curl -sI localhost:8080/theme.css                       # 样式表是否带上�
 [http-api.md](http-api.md)。
 
 注意 `/healthz` **不鉴权**，所以它只说公开层的事：`groups`/`links`/探测计数都只算公开条目，
-`warnings` 恒为空数组。要看完整告警读进程日志。
+响应里**没有 `warnings` 字段**（它带 `omitempty`，公开视图里是空的）。要看完整告警读进程日志，
+或解锁后的页面顶部提示条。

@@ -655,9 +655,10 @@ func isForge(kind string) bool {
 // branchFilter is the ref the webhook must match, or "" to accept any.
 //
 // Both --branch and a derived --forge-ref may be written the way git writes a
-// ref ("refs/heads/main") or the way a person does ("main"). The webhook
-// compares against "refs/heads/"+want, so a value that still carries the prefix
-// would never match and every push would be dropped in silence.
+// ref ("refs/heads/main") or the way a person does ("main"). The result is
+// always the short form, and the webhook normalises the pushed ref the same way;
+// a value that still carried its prefix would never match and every push would
+// be dropped in silence.
 //
 // Anything that is not a branch name (a tag, a commit, a bare SHA) yields no
 // filter on purpose: for those, a push to any branch can change what is read,

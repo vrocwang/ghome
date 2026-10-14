@@ -87,13 +87,14 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Ignore pushes to other branches: only the branch we actually read from
 	// should cause a reload.
 	//
-	// The comparison strips the ref prefix rather than pasting one on. The
-	// configured value may already be written as "refs/heads/main", and
-	// comparing that against "refs/heads/"+"refs/heads/main" would ignore every
-	// push while still answering 202 -- a silent freeze, which is the worst way
-	// for an update path to fail.
-	if want := s.opts.Branch; want != "" && payload.Ref != "" {
-		if trimRefPrefix(payload.Ref) != want {
+	// Both sides are normalised rather than one prefix being pasted onto the
+	// configured value: a --branch written as "refs/heads/main" used to be
+	// compared against "refs/heads/refs/heads/main", which ignored every push
+	// while still answering 202 -- a silent freeze, the worst way for an update
+	// path to fail. Doing it here rather than only in main.go means the option
+	// means the same thing however the server was built.
+	if want := branchName(s.opts.Branch); want != "" && payload.Ref != "" {
+		if branchName(payload.Ref) != want {
 			s.log.Info("webhook ignored: push is for another branch",
 				"ref", payload.Ref, "want", want, "remote", clientIP(r))
 			s.writeJSON(w, http.StatusAccepted, map[string]string{
@@ -171,17 +172,15 @@ func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// trimRefPrefix reduces a full git ref to its short name, so "refs/heads/main"
-// and "main" compare equal. A tag or a pull request ref keeps its prefix on
-// purpose: it can then never be mistaken for a branch of the same name.
-func trimRefPrefix(ref string) string {
+// branchName reduces either spelling of a branch to its short name, so
+// "refs/heads/main" and "main" compare equal, wherever the value came from.
+//
+// Only the heads prefix is stripped. A tag or a pull-request ref keeps its whole
+// path, so it can never be mistaken for a branch of the same name: a tag named
+// "main" must not reload the page just because a branch called main is watched.
+func branchName(ref string) string {
 	ref = strings.TrimSpace(ref)
-	for _, prefix := range []string{"refs/heads/", "refs/tags/"} {
-		if strings.HasPrefix(ref, prefix) {
-			return strings.TrimPrefix(ref, prefix)
-		}
-	}
-	return ref
+	return strings.TrimPrefix(ref, "refs/heads/")
 }
 
 func shorten(sha string) string {

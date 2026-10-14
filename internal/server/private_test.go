@@ -18,11 +18,11 @@ const privateDoc = `
 groups:
   - name: public
     links:
-      - {name: a, url: "https://a.example.com"}
+      - {name: a, url: "https://a.example.com", pinned: true}
   - name: secret
     private: true
     links:
-      - {name: b, url: "https://b.example.com"}
+      - {name: b, url: "https://b.example.com", pinned: true}
       - {name: e, url: "https://e.example.com"}
   - name: mixed
     links:
@@ -125,9 +125,9 @@ func TestNavWithholdsPrivateEntries(t *testing.T) {
 		// The counts describe what is on the page. Leaving them whole-config
 		// made the footer claim links the reader cannot see, and told an
 		// anonymous caller how many private groups exist.
-		if got.Meta.GroupCount != 2 || got.Meta.LinkCount != 2 {
-			t.Errorf("meta counts = %d groups / %d links, want the visible 2/2",
-				got.Meta.GroupCount, got.Meta.LinkCount)
+		if got.Meta.GroupCount != 2 || got.Meta.LinkCount != 2 || got.Meta.PinnedCount != 1 {
+			t.Errorf("meta counts = %d groups / %d links / %d pinned, want the visible 2/2/1",
+				got.Meta.GroupCount, got.Meta.LinkCount, got.Meta.PinnedCount)
 		}
 	})
 

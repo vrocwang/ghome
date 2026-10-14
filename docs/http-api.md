@@ -60,15 +60,16 @@
   "probesEnabled": true,       // 开启探测时才有下面两项
   "probesUp": 10, "probesDown": 2,   // 同样只算公开条目
   "iconsCached": 8,
-  "warnings": [],              // 空：见下
+  // 没有 warnings 字段：见下
   "lastError": "..."           // 只在这个字段出现时才有
 }
 ```
 
-`status` 的含义：`ok` 一切正常 · `degraded` 页面在正常工作但 git 里的配置是坏的（**监控该盯这个**）· `error` 一份配置都没加载成功 · `starting` 刚启动还在拉。HTTP 状态码只在 `error`/`starting` 时是 503。`warnings` 存在不影响 `status`——那是"容忍了但你该知道"。
+`status` 的含义：`ok` 一切正常 · `degraded` 页面在正常工作但 git 里的配置是坏的（**监控该盯这个**）· `error` 一份配置都没加载成功 · `starting` 刚启动还在拉。HTTP 状态码只在 `error`/`starting` 时是 503。被容忍的配置问题不影响 `status`——那是"容忍了但你该知道"，而它们**只出现在进程日志和解锁后的页面里**（见下）。
 
 **`/healthz` 不鉴权，所以它只描述公开层**：`groups`/`links`/`probesUp`/`probesDown` 都只算公开条目，
-`warnings` 恒为空数组。告警文本里带着条目名（`groups[0].links[0] (日记).hotkey: …`），放在一个可能
+`warnings` 这个字段根本不出现（它带 `omitempty`，公开视图里是空的）。告警文本里带着条目名
+（`groups[0].links[0] (日记).hotkey: …`），放在一个可能
 公网可达的接口上就等于把私密条目的名字念出来。完整告警在进程日志里，也在解锁后的页面上；
 `lastError` 仍然保留，因为监控需要它判断 `degraded`。
 
