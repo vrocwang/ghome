@@ -94,9 +94,10 @@ type Server struct {
 
 	// idx caches host -> page URL for /api/icon, rebuilt when the config
 	// revision changes.
-	idxMu  sync.Mutex
-	idx    map[string]string
-	idxRev string
+	idxMu        sync.Mutex
+	idx          map[string]string
+	privateHosts map[string]struct{}
+	idxRev       string
 
 	// streams counts open event streams, and streamsDone is closed to ask them
 	// all to finish.
@@ -409,7 +410,20 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	pageURL, ok := s.hostIndex()[host]
+	idx := s.hostIndex()
+
+	// A host only private entries use is not something an anonymous caller may
+	// confirm: answering here would say "this nav lists that host". Same reason
+	// /api/status is filtered. The cost is that an unlocked private link shows a
+	// letter avatar, because an <img> cannot carry the token.
+	if _, only := s.privateOnlyHosts()[host]; only {
+		if !s.private.allowed(r.Context(), bearerToken(r)) {
+			http.NotFound(w, r)
+			return
+		}
+	}
+
+	pageURL, ok := idx[host]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -437,6 +451,15 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 
 // hostIndex maps host -> a configured page URL on that host. It is memoised by
 // config revision because /api/icon is hit once per link on every page load.
+// privateOnlyHosts returns the hostnames no public entry uses. It is filled
+// alongside hostIndex so both come from the same revision.
+func (s *Server) privateOnlyHosts() map[string]struct{} {
+	s.hostIndex()
+	s.idxMu.Lock()
+	defer s.idxMu.Unlock()
+	return s.privateHosts
+}
+
 func (s *Server) hostIndex() map[string]string {
 	payload, ok := s.store.Get()
 	if !ok {
@@ -459,7 +482,7 @@ func (s *Server) hostIndex() map[string]string {
 		}
 		idx[strings.ToLower(u.Hostname())] = raw
 	}
-	s.idx, s.idxRev = idx, payload.Meta.Revision
+	s.idx, s.privateHosts, s.idxRev = idx, payload.PrivateOnlyHosts(), payload.Meta.Revision
 	return idx
 }
 

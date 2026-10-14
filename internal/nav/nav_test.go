@@ -698,3 +698,56 @@ func TestPublicOnConfigWithNoPrivateEntries(t *testing.T) {
 			len(cfg.Groups)-got)
 	}
 }
+
+func TestPrivateOnlyHosts(t *testing.T) {
+	cfg := mustParse(t, `
+groups:
+  - name: public
+    links:
+      - {name: a, url: "https://shared.example.com/"}
+      - {name: b, url: "https://lonely.example.com/", private: true}
+  - name: secret
+    private: true
+    links:
+      - {name: c, url: "https://shared.example.com/deep"}
+      - {name: d, url: "https://hidden.example.com/"}
+`)
+
+	got := cfg.PrivateOnlyHosts()
+	for _, host := range []string{"lonely.example.com", "hidden.example.com"} {
+		if _, ok := got[host]; !ok {
+			t.Errorf("%s is used only by private entries but was not withheld", host)
+		}
+	}
+	// A public link uses this host, so withholding its icon would break the
+	// public page for no gain.
+	if _, ok := got["shared.example.com"]; ok {
+		t.Error("a host a public link also uses was treated as private-only")
+	}
+	if len(got) != 2 {
+		t.Errorf("PrivateOnlyHosts() = %v, want exactly the two private-only hosts", got)
+	}
+}
+
+// Warnings name the entry they came from, so handing them to an anonymous caller
+// would give away what the filtering just removed.
+func TestPublicPayloadDropsWarnings(t *testing.T) {
+	cfg := mustParse(t, `
+groups:
+  - name: secret
+    private: true
+    links:
+      - {name: 日记, url: "https://diary.example.com", hotkey: "TOOLONG"}
+`)
+	payload := Payload{
+		Config: *cfg,
+		Meta:   Meta{Revision: "rev-1", Warnings: []string{"groups[0].links[0] (日记).hotkey: bad"}},
+	}
+
+	if len(payload.Public().Meta.Warnings) != 0 {
+		t.Errorf("Public() kept warnings: %v", payload.Public().Meta.Warnings)
+	}
+	if len(payload.Meta.Warnings) != 1 {
+		t.Error("Public() mutated the payload it was called on")
+	}
+}

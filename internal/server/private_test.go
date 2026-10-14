@@ -304,3 +304,81 @@ func TestNilVerifierRefusesEverything(t *testing.T) {
 		t.Error("an empty token was accepted")
 	}
 }
+
+// The icon endpoint answering for a private-only host would confirm that host is
+// in the config, which is the same disclosure that /api/status is filtered to
+// avoid. A host a public entry also uses is fine to serve.
+func TestIconEndpointWithholdsPrivateOnlyHosts(t *testing.T) {
+	st := store.New()
+	if err := st.Load([]byte(`
+groups:
+  - name: public
+    links:
+      - {name: shared, url: "https://shared.example.com/"}
+      - {name: local, url: "https://only-private.example.com/", private: true}
+  - name: secret
+    private: true
+    links:
+      - {name: hidden, url: "https://shared.example.com/other"}
+`), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	srv, _ := newTestServer(t, Options{
+		Store: st,
+		Icons: &fakeIcons{data: []byte("GIF89a"), ct: "image/gif", ok: true},
+		Verify: func(_ context.Context, token string) bool {
+			return token == goodToken
+		},
+	})
+
+	icon := func(host, token string) int {
+		req := httptest.NewRequest(http.MethodGet, "/api/icon?h="+host, nil)
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, req)
+		return rec.Code
+	}
+
+	if got := icon("only-private.example.com", ""); got != http.StatusNotFound {
+		t.Errorf("a private-only host answered %d to an anonymous caller, want 404", got)
+	}
+	if got := icon("only-private.example.com", "wrong"); got != http.StatusNotFound {
+		t.Errorf("a private-only host answered %d to a bad token, want 404", got)
+	}
+	if got := icon("only-private.example.com", goodToken); got != http.StatusOK {
+		t.Errorf("a private-only host answered %d to a valid token, want 200", got)
+	}
+	// A public entry uses this host, so hiding it would break the public page.
+	if got := icon("shared.example.com", ""); got != http.StatusOK {
+		t.Errorf("a host a public link also uses answered %d, want 200", got)
+	}
+}
+
+// A client that gives up mid-request cancels the request context. If that
+// cancelled call decided the verdict, the failure would be cached and lock a
+// legitimate viewer out for the whole failure TTL.
+func TestVerifierIgnoresACancelledCaller(t *testing.T) {
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var calls atomic.Int64
+	v := newVerifier(func(ctx context.Context, _ string) bool {
+		calls.Add(1)
+		// Stands in for the forge call: a cancelled context would fail here.
+		return ctx.Err() == nil
+	})
+
+	if !v.allowed(cancelled, goodToken) {
+		t.Fatal("a cancelled caller turned a good token into a refusal")
+	}
+	// The success has to be cached, otherwise the caller would still be checked
+	// again on every request.
+	if !v.allowed(context.Background(), goodToken) {
+		t.Fatal("the cached success was not reused")
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("check ran %d times, want 1 (the verdict must be cached)", got)
+	}
+}

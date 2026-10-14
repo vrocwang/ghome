@@ -14,6 +14,7 @@ import (
 // reach the forge, and a wrong token should not be a way to make ghome hammer
 // it -- so failures are remembered too, briefly.
 const (
+	verifyTimeout    = 10 * time.Second
 	verifySuccessTTL = 5 * time.Minute
 	verifyFailureTTL = 30 * time.Second
 	verifyMaxEntries = 256
@@ -60,7 +61,14 @@ func (v *verifier) allowed(ctx context.Context, token string) bool {
 	}
 	v.mu.Unlock()
 
-	ok := v.check(ctx, token)
+	// Detach from the caller's context. A client that gave up mid-request would
+	// otherwise cancel this call, and the failure would be cached as "this token
+	// is refused" -- locking a legitimate viewer out for the whole failure TTL.
+	// The timeout keeps a hanging forge from piling up goroutines.
+	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyTimeout)
+	defer cancel()
+
+	ok := v.check(checkCtx, token)
 
 	ttl := verifyFailureTTL
 	if ok {

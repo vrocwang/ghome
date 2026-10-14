@@ -298,19 +298,61 @@ func (c *Config) IconURLs() []string {
 	seen := make(map[string]struct{}, len(c.Groups))
 	out := make([]string, 0, len(c.Groups))
 	for _, raw := range c.PageURLs() {
-		u, err := url.Parse(strings.TrimSpace(raw))
-		if err != nil || u.Host == "" {
+		host := hostKey(raw)
+		if host == "" {
 			continue
 		}
-		if u.Scheme != "http" && u.Scheme != "https" {
-			continue
-		}
-		host := strings.ToLower(u.Hostname())
 		if _, dup := seen[host]; dup {
 			continue
 		}
 		seen[host] = struct{}{}
 		out = append(out, raw)
+	}
+	return out
+}
+
+// hostKey is the hostname a URL is filed under: lowercase, port stripped, and
+// empty for anything that is not http(s). /api/icon is keyed by this, so every
+// place that groups links by host has to agree on it.
+func hostKey(raw string) string {
+	u, err := url.Parse(strings.TrimSpace(raw))
+	if err != nil || u.Host == "" {
+		return ""
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return ""
+	}
+	return strings.ToLower(u.Hostname())
+}
+
+// PrivateOnlyHosts lists the hostnames that no public entry uses.
+//
+// Those are the ones an anonymous caller must not be able to probe for: the
+// icon endpoint answering for such a host would confirm the host is in the
+// config, which is the same disclosure that filtering /api/status avoids.
+func (c *Config) PrivateOnlyHosts() map[string]struct{} {
+	public := make(map[string]struct{}, len(c.Groups))
+	private := make(map[string]struct{}, len(c.Groups))
+
+	for _, g := range c.Groups {
+		for _, l := range g.Links {
+			host := hostKey(l.URL)
+			if host == "" {
+				continue
+			}
+			if g.Private || l.Private {
+				private[host] = struct{}{}
+				continue
+			}
+			public[host] = struct{}{}
+		}
+	}
+
+	out := make(map[string]struct{}, len(private))
+	for host := range private {
+		if _, shared := public[host]; !shared {
+			out[host] = struct{}{}
+		}
 	}
 	return out
 }
@@ -365,6 +407,10 @@ func (c *Config) PrivateEntries() int {
 func (p Payload) Public() Payload {
 	out := p
 	out.Config = *p.Config.Public()
+	// Warnings name the entry they came from -- "groups[0].links[0] (日记).hotkey:
+	// ..." -- so they would give away exactly what the filtering just removed.
+	// The operator still sees them in /healthz, and in the page once unlocked.
+	out.Meta.Warnings = nil
 	return out
 }
 
