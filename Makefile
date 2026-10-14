@@ -9,7 +9,7 @@ BUILD   := CGO_ENABLED=0 go build -trimpath -ldflags "$(LDFLAGS)"
 help:
 	@echo "make build     - build bin/ghome for this machine"
 	@echo "make run       - run against ./nav.yaml"
-	@echo "make cross     - build linux/amd64, linux/arm64 and darwin/arm64 into dist/"
+	@echo "make cross     - build linux/amd64, linux/arm64, darwin/arm64 and darwin/amd64 into dist/"
 	@echo "make check     - fmt + vet + test"
 	@echo "make ui-check  - drive the UI in headless Chrome (needs a running ghome)"
 	@echo "make docker    - build the image, with the version passed in"

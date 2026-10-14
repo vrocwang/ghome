@@ -82,4 +82,14 @@ buildx 那套自动推断对这个项目本来就是多余的。
 
 顺带说一下版本号：Dockerfile 用 `--build-arg VERSION` 显式注入 `-ldflags
 "-X main.version=..."`，所以镜像里 `ghome --version` 和 `/healthz` 的 `version`
-字段报的是真实版本，不是 `dev`。不传的话就是 `dev`。
+字段报的是真实版本，不是 `dev`；不传就是 `dev`。
+
+但**用 `sudo make docker` 时这个前提不成立**：`Makefile` 顶部的
+`VERSION := $(shell git describe ...)` 是在 make 解析阶段执行的，而那一刻已经
+是 root——正是上面那种 dubious ownership 场景，`git describe` 失败并回退成
+`dev`，`VCS_REF` 回退成 `unknown`。所以办法 3 能消掉 WARNING，却拿不到真实版本。
+两个都要，就别用 root 构建（[办法 1](#办法-1别用-root-构建真正的修法)），或者显式传：
+
+```bash
+sudo make docker VERSION=$(git describe --tags --always --dirty) VCS_REF=$(git rev-parse --short HEAD)
+```
