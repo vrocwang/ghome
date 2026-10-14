@@ -393,7 +393,8 @@ make run      # 用 ./nav.yaml 跑起来
 make ui-check # 无头 Chrome 驱动界面（需要先跑起一个实例）
 ```
 
-前端没有构建步骤也没有 Go 测试，所以界面回归靠 `scripts/ui-check.mjs`（22 项断言；配置里没有
-置顶条目时跳过 2 项，任一失败即非 0 退出）。它需要 Chrome，因此不在 `go test` 里——那条路径
-保持零外部依赖。代码结构与测试覆盖范围见
+前端没有构建步骤也没有 Go 测试，所以界面回归靠 `scripts/ui-check.mjs`（22 项断言，任一失败即
+非 0 退出）。它需要 Chrome，因此不在 `go test` 里——那条路径保持零外部依赖。其中"标签全部渲染"
+与"不给不探测的链接挂状态灯"两条，只有在配置覆盖到对应形状时才有意义，所以用普通 `nav.yaml`
+跑会打印 `skip`；要真正跑到它们，用仓库里的样本 `nav.ui-test.yaml` 起一个实例。详见
 [`docs/development.md`](docs/development.md)。

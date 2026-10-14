@@ -222,6 +222,7 @@ try {
       // Pinned entries live in the strip, which never shows tags or a light.
       tagged: links.filter((l) => l.tags && l.tags.length && !l.pinned)
         .map((l) => ({ name: l.name, want: l.tags.length })),
+      showDots: !!(cfg.status && cfg.status.enabled),
     };
   })()`);
 
@@ -231,7 +232,19 @@ try {
       return row && row.tags !== t.want ? `${t.name}: rendered ${row.tags} of ${t.want}` : null;
     })
     .filter(Boolean);
-  check('every tag in the config is rendered', tagMismatch.length === 0, tagMismatch.join('; '));
+
+  // The old bug drew at most two chips while the search box matched them all, so
+  // this only proves anything when the config actually carries more than two and
+  // the layout shows them. Say "not exercised" rather than pass silently: a green
+  // check over a config that cannot fail is worse than no check.
+  const tagShown = shape.layout === 'grid';
+  const tagDiscriminating = linkView.tagged.some((t) => t.want > 2) && tagShown;
+  if (!tagDiscriminating) {
+    console.log('  skip every tag in the config is rendered — need a non-pinned link with >2'
+      + ` tags in a layout that shows them (layout=${shape.layout}, widest=${Math.max(0, ...linkView.tagged.map((t) => t.want))})`);
+  } else {
+    check('every tag in the config is rendered', tagMismatch.length === 0, tagMismatch.join('; '));
+  }
 
   const dotMismatch = linkView.rendered
     .map((row) => {
@@ -243,8 +256,16 @@ try {
       return null;
     })
     .filter(Boolean);
-  check('no status light on a link the server never probes',
-    dotMismatch.length === 0, dotMismatch.join('; '));
+
+  // This one catches the opposite failure too, so it only needs a config where
+  // probing is on at all; without that there is no light to reason about.
+  if (!linkView.showDots) {
+    console.log('  skip no status light on a link the server never probes — status probing is'
+      + ' switched off in this config, so nothing renders a light');
+  } else {
+    check('no status light on a link the server never probes',
+      dotMismatch.length === 0, dotMismatch.join('; '));
+  }
 
   /* ---------- pinned entries must not be duplicated ---------- */
 

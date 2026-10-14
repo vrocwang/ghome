@@ -1,0 +1,61 @@
+# 界面回归样本
+#
+# 这个文件是给 `scripts/ui-check.mjs` 用的：它包含几个"只有在特定配置下才会出问题"
+# 的形状，日常的 nav.yaml 通常没有，于是相关断言会跳过（脚本会明确打印 skip）。
+#
+# 用法（先起一个实例，再跑检查）：
+#   ./bin/ghome --source=file --file=nav.ui-test.yaml --poll=1s &
+#   node scripts/ui-check.mjs http://127.0.0.1:8080/
+#
+# 它刻意覆盖：
+#   * 一个链接带 8 个标签（超过 2 个，才能验证"标签全渲染"——旧版只画前两个而搜索匹配全部）
+#   * 一个超长标签（验证 chip 被截断、不压住图标与链接名）
+#   * status 开启，且同时有 http、probe: false、ssh:、mailto: 四种链接
+#     （验证"不给服务端不探测的链接挂状态灯"）
+#   * 一条置顶链接（验证置顶项不在分组里重复，且置顶条不渲染标签）
+
+site:
+  title: 界面回归样本
+  subtitle: 给 ui-check.mjs 用的形状集合
+
+status:
+  enabled: true
+  interval: 60s
+  timeout: 3s
+
+groups:
+  - name: 标签形状
+    description: 前两条专门用来暴露"只画两个标签"这类回归
+    links:
+      - name: 八个标签
+        url: https://eight.example.com
+        tags: [one, two, three, four, five, six, seven, eight]
+      - name: 超长标签
+        url: https://long.example.com
+        tags: [一个非常非常长的标签名称用来把容器撑破, x]
+      - name: 很长很长的链接名字用来挤占横向空间
+        url: https://longname.example.com
+        description: 一段同样很长的描述
+        tags: [one, two, three]
+
+  - name: 探测形状
+    description: 只有会红的 http 那条该有状态灯
+    links:
+      - name: 会红的服务
+        url: https://127.0.0.1:1/
+      - name: 关掉探测
+        url: https://off.example.com
+        probe: false
+      - name: ssh 跳板
+        url: ssh://git@10.0.0.5:2222
+      - name: 邮件
+        url: mailto:team@example.com
+
+  - name: 置顶形状
+    links:
+      - name: 置顶项
+        url: https://pinned.example.com
+        pinned: true
+        tags: [pinned]
+      - name: 普通项
+        url: https://plain.example.com
