@@ -123,7 +123,10 @@ type Group struct {
 	Description string `yaml:"description" json:"description"`
 	// Color tints this group's card and heading. Same syntax as style.accent.
 	Color string `yaml:"color" json:"color,omitempty"`
-	Links []Link `yaml:"links" json:"links"`
+	// Private hides the whole group, links included, from a caller that has not
+	// proved it may see it.
+	Private bool   `yaml:"private" json:"private,omitempty"`
+	Links   []Link `yaml:"links" json:"links"`
 }
 
 // Link is a single navigation entry.
@@ -142,6 +145,8 @@ type Link struct {
 	// Probe is false to exclude this link from status probing. Nil means the
 	// default, which is to probe.
 	Probe *bool `yaml:"probe" json:"probe,omitempty"`
+	// Private hides this link from a caller that has not proved it may see it.
+	Private bool `yaml:"private" json:"private,omitempty"`
 }
 
 // Meta describes where the loaded revision came from. It is filled in by the
@@ -166,6 +171,18 @@ type Meta struct {
 type Payload struct {
 	Config
 	Meta Meta `json:"meta"`
+	// Private is filled per request, because whether the private entries are
+	// included depends on the caller's token. It is absent when the config has
+	// nothing private, which is how the frontend knows not to offer a lock.
+	Private *PrivateView `json:"private,omitempty"`
+}
+
+// PrivateView tells the frontend whether the lock affordance is relevant.
+type PrivateView struct {
+	// Total counts the entries marked private, revealed or not.
+	Total int `json:"total"`
+	// Locked is true when they were withheld from this response.
+	Locked bool `json:"locked"`
 }
 
 // Duration is a time.Duration that reads and writes Go duration strings
@@ -294,6 +311,72 @@ func (c *Config) IconURLs() []string {
 		}
 		seen[host] = struct{}{}
 		out = append(out, raw)
+	}
+	return out
+}
+
+// Public returns a copy with every private entry removed.
+//
+// A group left with no links is dropped as well as a private one: an empty card
+// would still show the group's name, and the name is usually the revealing part.
+func (c *Config) Public() *Config {
+	out := *c
+	out.Groups = make([]Group, 0, len(c.Groups))
+	for _, g := range c.Groups {
+		if g.Private {
+			continue
+		}
+		links := make([]Link, 0, len(g.Links))
+		for _, l := range g.Links {
+			if l.Private {
+				continue
+			}
+			links = append(links, l)
+		}
+		if len(links) == 0 {
+			continue
+		}
+		g.Links = links
+		out.Groups = append(out.Groups, g)
+	}
+	return &out
+}
+
+// PrivateEntries counts the entries a public view withholds: private links,
+// plus every link of a private group.
+func (c *Config) PrivateEntries() int {
+	n := 0
+	for _, g := range c.Groups {
+		if g.Private {
+			n += len(g.Links)
+			continue
+		}
+		for _, l := range g.Links {
+			if l.Private {
+				n++
+			}
+		}
+	}
+	return n
+}
+
+// Public returns the payload with the private entries removed, keeping Meta and
+// the per-request view intact.
+func (p Payload) Public() Payload {
+	out := p
+	out.Config = *p.Config.Public()
+	return out
+}
+
+// VisibleURLs lists the URLs a response exposes, which is what /api/status is
+// allowed to talk about: a probe result for a withheld link would give the link
+// away.
+func (p Payload) VisibleURLs() map[string]struct{} {
+	out := make(map[string]struct{}, 16)
+	for _, g := range p.Groups {
+		for _, l := range g.Links {
+			out[l.URL] = struct{}{}
+		}
 	}
 	return out
 }

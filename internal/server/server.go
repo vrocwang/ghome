@@ -44,7 +44,10 @@ type IconSource interface {
 // StatusSource is the health prober as the HTTP layer needs it. Snapshot
 // returns a value that is marshalled straight to JSON.
 type StatusSource interface {
-	Snapshot() any
+	// Snapshot returns the results to publish. allow lists the URLs the caller
+	// may see, and nil means no restriction. Results for anything else are
+	// dropped, because a probe result names the service that was probed.
+	Snapshot(allow map[string]struct{}) any
 	Stats() (targets, up, down int)
 }
 
@@ -57,6 +60,9 @@ type Options struct {
 	Icons IconSource
 	// Status reports probe results. Nil disables /api/status.
 	Status StatusSource
+	// Verify reports whether a viewer token may read the config repository.
+	// Nil keeps every private entry hidden, which is the safe default.
+	Verify func(ctx context.Context, token string) bool
 	// Source describes where the config comes from, for /healthz. It is
 	// reported even when nothing has loaded yet, which is precisely when an
 	// operator needs to see what the process is pointed at.
@@ -97,6 +103,9 @@ type Server struct {
 	streams     atomic.Int64
 	streamsDone chan struct{}
 	streamsOnce sync.Once
+
+	// private verifies the viewer token that unlocks private entries.
+	private *verifier
 }
 
 // maxEventStreams caps concurrent SSE clients. A browser tab holds one, so this
@@ -134,7 +143,13 @@ func New(o Options) (*Server, error) {
 		o.WebDir = filepath.Clean(o.WebDir)
 	}
 
-	s := &Server{store: o.Store, opts: o, log: o.Logger, streamsDone: make(chan struct{})}
+	s := &Server{
+		store:       o.Store,
+		opts:        o,
+		log:         o.Logger,
+		streamsDone: make(chan struct{}),
+		private:     newVerifier(o.Verify),
+	}
 
 	embedded, err := fs.Sub(webRoot, "web")
 	if err != nil {
@@ -350,7 +365,7 @@ func (s *Server) handleNav(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Cache-Control", "no-store")
-	s.writeJSON(w, http.StatusOK, payload)
+	s.writeJSON(w, http.StatusOK, s.viewFor(r.Context(), bearerToken(r), payload))
 }
 
 // handleStatus serves the optional health probe results. When probing is
@@ -366,9 +381,13 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		s.writeJSON(w, http.StatusOK, map[string]any{"enabled": false, "results": map[string]any{}})
 		return
 	}
+	// A probe result mentions the service it probed, so a withheld link must not
+	// have one. The allowed set comes from the same payload the caller sees.
+	visible := s.viewFor(r.Context(), bearerToken(r), payload)
+
 	s.writeJSON(w, http.StatusOK, map[string]any{
 		"enabled": true,
-		"results": s.opts.Status.Snapshot(),
+		"results": s.opts.Status.Snapshot(visible.VisibleURLs()),
 	})
 }
 

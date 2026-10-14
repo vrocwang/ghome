@@ -219,7 +219,26 @@ func (p *Prober) Results() map[string]Result {
 // Snapshot returns the probe results in the shape the HTTP layer marshals to
 // /api/status. It is the same data as Results, typed so *Prober satisfies the
 // server's StatusSource interface.
-func (p *Prober) Snapshot() any { return p.Results() }
+// Snapshot returns the results to publish. allow lists the URLs the caller may
+// see, and nil means no restriction.
+func (p *Prober) Snapshot(allow map[string]struct{}) any {
+	if allow == nil {
+		return p.Results()
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	out := make(map[string]Result, len(p.targets))
+	for _, t := range p.targets {
+		if _, ok := allow[t]; !ok {
+			continue
+		}
+		if r, ok := p.results[t]; ok {
+			out[t] = r
+		}
+	}
+	return out
+}
 
 // Stats reports counts for the /healthz endpoint: how many URLs are being
 // probed and how many are currently up and down.

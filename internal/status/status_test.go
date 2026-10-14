@@ -630,7 +630,7 @@ func TestConcurrentSetTargetsResultsAndRun(t *testing.T) {
 					_ = r.State
 				}
 				_, _, _ = p.Stats()
-				_ = p.Snapshot()
+				_ = p.Snapshot(nil)
 			}
 			_ = i
 		}()

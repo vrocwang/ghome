@@ -19,6 +19,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -107,7 +108,25 @@ func run() error {
 	// Every piece of derived state is kept in step from this one function, so
 	// there is no way for the icon allow-list or the probe targets to drift away
 	// from the config that is actually being served.
+	// Unlocking a private entry means proving you can read the config
+	// repository, so there is no separate allow list: the permission model is
+	// the one already maintained in the forge.
+	//
+	// File mode has no forge to ask. That leaves the tier locked for everyone
+	// rather than open to everyone, which is the safe direction, but it is
+	// worth saying out loud because the symptom is silence.
+	var verifyPrivate func(context.Context, string) bool
+	if g, ok := src.(*source.Gitea); ok {
+		verifyPrivate = g.CanRead
+	}
+
+	var warnedPrivate atomic.Bool
+
 	applyConfig := func(cfg *nav.Config) {
+		if verifyPrivate == nil && cfg.PrivateEntries() > 0 && warnedPrivate.CompareAndSwap(false, true) {
+			log.Warn("nav.yaml marks entries private but this source cannot verify a viewer token, " +
+				"so they will never be served; private entries need --source=gitea or forgejo")
+		}
 		// IconURLs, not PageURLs: one URL per host is what the icon endpoint can
 		// ever serve, so warming more than that fetches icons nobody can reach.
 		iconURLs := cfg.IconURLs()
@@ -148,6 +167,7 @@ func run() error {
 		Icons:         iconAdapter{iconCache},
 		Status:        probes,
 		Branch:        branch,
+		Verify:        verifyPrivate,
 		WebhookSecret: o.webhookSecret,
 		AdminToken:    o.adminToken,
 		BasePath:      o.basePath,
@@ -329,13 +349,13 @@ func (p *prober) stop() {
 }
 
 // Snapshot implements server.StatusSource.
-func (p *prober) Snapshot() any {
+func (p *prober) Snapshot(allow map[string]struct{}) any {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	if p.current == nil {
 		return map[string]status.Result{}
 	}
-	return p.current.Snapshot()
+	return p.current.Snapshot(allow)
 }
 
 // Stats implements server.StatusSource.

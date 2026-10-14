@@ -567,10 +567,22 @@ func TestIconEndpoint(t *testing.T) {
 	})
 }
 
-// fakeStatus stands in for the prober.
+// fakeStatus stands in for the prober. It honours the allow list so that tests
+// can prove a withheld link's probe result does not leak.
 type fakeStatus struct{ results map[string]status.Result }
 
-func (f fakeStatus) Snapshot() any { return f.results }
+func (f fakeStatus) Snapshot(allow map[string]struct{}) any {
+	if allow == nil {
+		return f.results
+	}
+	out := make(map[string]status.Result, len(f.results))
+	for url, r := range f.results {
+		if _, ok := allow[url]; ok {
+			out[url] = r
+		}
+	}
+	return out
+}
 func (f fakeStatus) Stats() (int, int, int) {
 	up, down := 0, 0
 	for _, r := range f.results {

@@ -29,7 +29,11 @@
     healthDot: document.getElementById('healthDot'),
     healthText: document.getElementById('healthText'),
     pinned: document.getElementById('pinned'),
-    pinnedRow: document.getElementById('pinnedRow')
+    pinnedRow: document.getElementById('pinnedRow'),
+    lockToggle: document.getElementById('lockToggle'),
+    unlockForm: document.getElementById('unlockForm'),
+    unlockToken: document.getElementById('unlockToken'),
+    unlockCancel: document.getElementById('unlockCancel')
   };
 
   var stateBox = document.getElementById('stateBox');
@@ -250,10 +254,76 @@
     var cfg = state.config;
     if (!cfg) return;
     renderHeader(cfg);
+    renderLock();
     renderBanner(cfg);
     renderContent();
     renderHealthPill();
     renderMeta(cfg);
+  }
+
+  // The lock only appears when the config actually has private entries, so a nav
+  // with none never grows a button that does nothing.
+  function renderLock() {
+    var view = (state.config && state.config.private) || null;
+    if (!view || !view.total) {
+      els.lockToggle.hidden = true;
+      els.unlockForm.hidden = true;
+      return;
+    }
+    els.lockToggle.hidden = false;
+    els.lockToggle.classList.toggle('unlocked', !view.locked);
+    els.lockToggle.title = view.locked
+      ? '显示 ' + view.total + ' 个私密链接'
+      : '已解锁 ' + view.total + ' 个私密链接，点此隐藏';
+    if (!view.locked) els.unlockForm.hidden = true;
+  }
+
+  // The revision does not change when you unlock, so load() would decide there
+  // is nothing to redraw. Clearing it forces a render.
+  function reloadView() {
+    state.renderedRev = null;
+    return load({ notify: false });
+  }
+
+  function wireUnlock() {
+    els.lockToggle.addEventListener('click', function () {
+      var view = state.config && state.config.private;
+      if (view && !view.locked) {
+        setStoredToken('');
+        reloadView();
+        return;
+      }
+      els.unlockForm.hidden = !els.unlockForm.hidden;
+      if (!els.unlockForm.hidden) els.unlockToken.focus();
+    });
+
+    els.unlockCancel.addEventListener('click', function () {
+      els.unlockForm.hidden = true;
+    });
+
+    els.unlockForm.addEventListener('submit', async function (event) {
+      event.preventDefault();
+      var value = els.unlockToken.value.trim();
+      if (!value) return;
+
+      setStoredToken(value);
+      els.unlockToken.value = '';
+      await reloadView();
+
+      var view = state.config && state.config.private;
+      if (view && view.locked) {
+        // The forge refused it. Say so, rather than leaving the page looking
+        // exactly as before, which reads as "the button is broken".
+        setStoredToken('');
+        await reloadView();
+        els.unlockForm.hidden = false;
+        els.unlockToken.focus();
+        toast('令牌被拒绝：它不能读取配置仓');
+        return;
+      }
+      els.unlockForm.hidden = true;
+      toast('已解锁私密链接');
+    });
   }
 
   function renderHeader(cfg) {
@@ -601,8 +671,32 @@
 
   /* ---------- data loading ---------- */
 
+  // The private tier is unlocked with a Forgejo token that can read the config
+  // repository. It lives in sessionStorage rather than a cookie: nothing is
+  // attached automatically, so there is no CSRF surface, and closing the tab is
+  // the logout.
+  var TOKEN_KEY = 'ghome.token';
+
+  function storedToken() {
+    try { return sessionStorage.getItem(TOKEN_KEY) || ''; } catch (e) { return ''; }
+  }
+
+  function setStoredToken(value) {
+    try {
+      if (value) sessionStorage.setItem(TOKEN_KEY, value);
+      else sessionStorage.removeItem(TOKEN_KEY);
+    } catch (e) { /* private mode: the unlock simply will not persist */ }
+  }
+
   async function fetchJSON(path) {
-    var res = await fetch(path, { cache: 'no-store', headers: { Accept: 'application/json' } });
+    var headers = { Accept: 'application/json' };
+    var token = storedToken();
+    // Only these two answers depend on who is asking, and a token never belongs
+    // in a URL.
+    if (token && (path === 'api/nav' || path === 'api/status')) {
+      headers.Authorization = 'Bearer ' + token;
+    }
+    var res = await fetch(path, { cache: 'no-store', headers: headers });
     var body = null;
     try {
       body = await res.json();
@@ -865,6 +959,7 @@
 
   function init() {
     bindEvents();
+    wireUnlock();
     updateThemeLabel();
     renderSkeletons();
     load({ silent: false }).then(connect);

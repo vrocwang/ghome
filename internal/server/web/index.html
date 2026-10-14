@@ -30,6 +30,10 @@
         <span class="dot" id="healthDot"></span>
         <span id="healthText"></span>
       </button>
+      <button class="icon-button" id="lockToggle" type="button" hidden aria-label="解锁私密链接">
+        <svg class="ico ico-locked" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7.6a4 4 0 0 1 8 0v2.9"/></svg>
+        <svg class="ico ico-unlocked" viewBox="0 0 24 24" aria-hidden="true"><rect x="4.5" y="10.5" width="15" height="10" rx="2.2"/><path d="M8 10.5V7.6a4 4 0 0 1 7.5-1.9"/></svg>
+      </button>
       <button class="icon-button" id="themeToggle" type="button" aria-label="切换主题">
         <svg class="ico ico-auto" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 0 0 0 18z" class="fill"/></svg>
         <svg class="ico ico-light" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.2"/><path d="M12 2v2.6M12 19.4V22M4.2 4.2l1.9 1.9M17.9 17.9l1.9 1.9M2 12h2.6M19.4 12H22M4.2 19.8l1.9-1.9M17.9 6.1l1.9-1.9"/></svg>
@@ -43,6 +47,14 @@
     <input id="searchInput" type="text" placeholder="搜索…" autocomplete="off" autocapitalize="off" spellcheck="false" aria-label="搜索导航">
     <kbd id="searchHint">/</kbd>
   </div>
+
+  <form class="unlock" id="unlockForm" hidden autocomplete="on">
+    <label class="unlock-label" for="unlockToken">Forgejo 令牌</label>
+    <input id="unlockToken" name="password" type="password" autocomplete="current-password"
+           placeholder="能读取配置仓的访问令牌" spellcheck="false">
+    <button type="submit">解锁</button>
+    <button type="button" id="unlockCancel">取消</button>
+  </form>
 
   <div class="banner" id="banner" hidden></div>
 

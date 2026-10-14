@@ -198,6 +198,48 @@ kbd {
 :root[data-theme-pref="light"] .ico-light,
 :root[data-theme-pref="dark"] .ico-dark { display: block; }
 
+/* The lock shows a closed padlock until the private entries are unlocked. */
+#lockToggle .ico-locked { display: block; }
+#lockToggle.unlocked .ico-locked { display: none; }
+#lockToggle.unlocked .ico-unlocked { display: block; }
+
+/* ------------------------------------------------------- private unlock */
+
+.unlock {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin: 0 0 16px;
+  padding: 11px 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--sunken);
+}
+.unlock-label { font-size: calc(var(--font-size) - 2px); color: var(--muted); }
+.unlock input {
+  flex: 1 1 240px;
+  min-width: 0;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(var(--font-size) - 1px);
+}
+.unlock button {
+  padding: 7px 13px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: calc(var(--font-size) - 1px);
+  cursor: pointer;
+}
+.unlock button[type="submit"] { border-color: var(--accent); color: var(--accent); }
+
 /* --------------------------------------------------------------- search */
 
 .searchbar {

@@ -163,7 +163,7 @@ func TestProberSupervisor(t *testing.T) {
 	p := newProber(ctx, st, discardLogger())
 
 	// Nothing applied yet: the HTTP layer must still get a usable answer.
-	if p.Snapshot() == nil {
+	if p.Snapshot(nil) == nil {
 		t.Error("Snapshot() = nil before any config was applied")
 	}
 	if targets, _, _ := p.Stats(); targets != 0 {

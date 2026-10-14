@@ -624,3 +624,77 @@ groups:
 		t.Errorf("PageURLs() = %d urls, want all 5", n)
 	}
 }
+
+const privateDoc = `
+groups:
+  - name: public
+    links:
+      - {name: a, url: "https://a.example.com"}
+  - name: secret
+    private: true
+    links:
+      - {name: b, url: "https://b.example.com"}
+      - {name: c, url: "https://c.example.com"}
+  - name: mixed
+    links:
+      - {name: d, url: "https://d.example.com"}
+      - {name: e, url: "https://e.example.com", private: true}
+  - name: all-private
+    links:
+      - {name: f, url: "https://f.example.com", private: true}
+`
+
+func TestPublicDropsPrivateEntries(t *testing.T) {
+	cfg := mustParse(t, privateDoc)
+
+	if got := cfg.PrivateEntries(); got != 4 {
+		t.Errorf("PrivateEntries() = %d, want 4 (2 in the private group + 1 mixed + 1 alone)", got)
+	}
+
+	pub := cfg.Public()
+
+	var names []string
+	for _, g := range pub.Groups {
+		names = append(names, g.Name)
+	}
+	// "secret" is private, and "all-private" is left with nothing. The second
+	// one matters as much as the first: an empty card would still show the
+	// group's name, and the name is usually the revealing part.
+	want := []string{"public", "mixed"}
+	if len(names) != len(want) {
+		t.Fatalf("groups = %v, want %v", names, want)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Errorf("groups[%d] = %q, want %q", i, names[i], want[i])
+		}
+	}
+
+	var links []string
+	for _, g := range pub.Groups {
+		for _, l := range g.Links {
+			links = append(links, l.Name)
+		}
+	}
+	wantLinks := []string{"a", "d"}
+	if len(links) != len(wantLinks) || links[0] != "a" || links[1] != "d" {
+		t.Errorf("links = %v, want %v", links, wantLinks)
+	}
+
+	// The original must be untouched: it is what an unlocked caller gets, and
+	// it is the same value the store serves to everyone else.
+	if len(cfg.Groups) != 4 || cfg.PrivateEntries() != 4 {
+		t.Errorf("Public() mutated the receiver: %d groups, %d private", len(cfg.Groups), cfg.PrivateEntries())
+	}
+}
+
+func TestPublicOnConfigWithNoPrivateEntries(t *testing.T) {
+	cfg := mustParse(t, minimalDoc)
+	if got := cfg.PrivateEntries(); got != 0 {
+		t.Errorf("PrivateEntries() = %d, want 0", got)
+	}
+	if got := len(cfg.Public().Groups); got != len(cfg.Groups) {
+		t.Errorf("Public() dropped %d groups from a config with nothing private",
+			len(cfg.Groups)-got)
+	}
+}

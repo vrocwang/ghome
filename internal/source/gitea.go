@@ -145,6 +145,36 @@ func (g *Gitea) FetchPath(ctx context.Context, path string) (Snapshot, error) {
 	return g.fetchPath(ctx, path)
 }
 
+// CanRead reports whether the supplied token may read this source's repository.
+//
+// This is how a viewer proves it belongs to the group that can already see the
+// config: repository access is the permission, so there is no separate allow
+// list to keep in step with the forge.
+func (g *Gitea) CanRead(ctx context.Context, token string) bool {
+	if strings.TrimSpace(token) == "" {
+		return false
+	}
+	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s",
+		g.base, escapeSegment(g.owner), escapeSegment(g.repo))
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return false
+	}
+	req.Header.Set("Accept", "application/json")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := g.client.Do(req)
+	if err != nil {
+		return false
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
+	return resp.StatusCode == http.StatusOK
+}
+
 func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s/contents/%s?ref=%s",
 		g.base, escapeSegment(g.owner), escapeSegment(g.repo), escapePath(path), url.QueryEscape(g.ref))

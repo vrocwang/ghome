@@ -25,6 +25,7 @@
 **配置**
 
 - [nav.yaml 配置](#navyaml-配置)
+- [私密链接](#私密链接)
 - [校验分级](#校验分级)
 - [改样式不用重新编译](#改样式不用重新编译)
 - [三套布局](#三套布局)
@@ -424,6 +425,7 @@ groups:                   # 至少要有一个分组、一个链接
     icon: "⌨️"             # (空)
     description: 日常开发    # (空)
     color: "#2f9e6f"       # (空) 这一组的主色
+    private: false         # (false) true = 整组隐藏，见「私密链接」
     links:
       - name: Gitea                      # (必填)
         url: https://git.example.com     # (必填)
@@ -434,6 +436,7 @@ groups:                   # 至少要有一个分组、一个链接
         newTab: true                     # (true)
         pinned: false                    # (false)
         probe: true                      # (true)
+        private: false                   # (false) 见「私密链接」
 ```
 
 主题只由用户切换（页面右上角的开关、`T` 键，或跟随系统），没有配置项——
@@ -455,6 +458,50 @@ groups:                   # 至少要有一个分组、一个链接
 ```
 
 （早先版本用的是 `http/https/mailto/tel` 白名单，那样上面这些全被拒——那确实过死了，已经改成黑名单。）
+
+---
+
+## 私密链接
+
+有些链接不该让访客看到——自建日记、内部工具、带 token 的入口。给链接或整个分组加
+`private: true`：
+
+```yaml
+groups:
+  - name: 我的私密
+    private: true            # 整组隐藏，连分组名一起
+    links:
+      - {name: 日记, url: https://diary.example.com}
+  - name: 混合
+    links:
+      - {name: 公开的, url: https://example.com}
+      - {name: 私密的, url: https://secret.example.com, private: true}
+```
+
+**过滤在服务端做。** 未解锁的请求根本收不到这些条目。如果照常发给浏览器、再由前端藏起来，
+任何人 `curl` 一次就全拿到了——包括 URL 里可能带的 token。同理，被过滤后只剩空壳的分组会
+整个丢掉，否则**分组名本身就泄露了**。
+
+**解锁用「能读配置仓的 Forgejo 令牌」。** 权限模型你已经在 Forgejo 里维护着了，所以没有
+第二份用户名单要对齐：
+
+1. 点右上角的锁，粘贴令牌。这是一个**标准表单**，密码管理器会记住它——这正是它比
+   nginx `auth_basic` 好用的地方。
+2. ghome 拿它调一次 `GET /api/v1/repos/{owner}/{repo}`，**返回 200 就解锁**。用的是配置源
+   已有的那组设置，不需要新配置。
+3. 令牌存在浏览器 `sessionStorage`：刷新还在，**关掉标签页即失效**。
+
+撤销某人 = 从配置仓协作者里移除，他的令牌下次就通不过。
+
+几条边界值得说清：
+
+- **它只决定给不给你看，不保护目标服务本身。** 日记/文案服务自己的登录还得自己配。
+- 解锁之后那些 URL 就进了那个浏览器（历史、devtools）。它是「别让访客瞄一眼就看到」，
+  不是「抵抗能登进这台机器的人」。
+- **探测结果一并过滤**（`/api/status`），否则状态灯会把你藏起来的主机名报出来。
+- **`private` 只在 `--source=gitea` / `forgejo` 时才有得解锁。** 文件模式没有可询问的 forge，
+  于是私密项对**所有人**都不外发（fail closed），启动时会有一条 warning 说明原因。
+- 令牌不对时页面仍旧是公开层的样子，只给一条提示，不会变成错误页。
 
 ---
 
