@@ -512,8 +512,11 @@
     a.appendChild(body);
 
     if (link.tags && link.tags.length) {
+      // Every tag is rendered: the cap belongs on the server, where exceeding
+      // it produces a warning, rather than here where it silently dropped chips
+      // that the search box still matched.
       var tags = el('span', 'link-tags');
-      link.tags.slice(0, 2).forEach(function (tag) {
+      link.tags.forEach(function (tag) {
         tags.appendChild(el('span', 'tag', tag));
       });
       a.appendChild(tags);

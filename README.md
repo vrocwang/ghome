@@ -122,7 +122,7 @@ groups:
 | `groups[].icon` / `description` / `color` | 空 | 标题前的图标、副标题、这组的主色 |
 | `groups[].private` | `false` | 整组隐藏，见[私密链接](#私密链接) |
 | `links[].name` / `url` | 必填 | 链接名与地址 |
-| `links[].description` / `icon` / `tags` | 空 | 副标题、图标（`auto` = 服务端解析）、标签 |
+| `links[].description` / `icon` / `tags` | 空 | 副标题、图标（`auto` = 服务端解析）、标签（**只在 grid 布局显示**，最多 8 个；在所有布局里都是搜索关键词） |
 | `links[].hotkey` | 空 | 单字符，页面任意位置按下即跳转 |
 | `links[].newTab` / `pinned` / `probe` / `private` | `true` / `false` / `true` / `false` | 新标签页打开 / 提升到置顶区 / 参与状态探测 / 只有解锁后可见 |
 

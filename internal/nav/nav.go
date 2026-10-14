@@ -42,6 +42,12 @@ const (
 // DefaultTitle is used when site.title is empty.
 const DefaultTitle = "导航"
 
+// maxTags caps the tags a link may carry. Every tag becomes a chip in the card,
+// so an unbounded list lets one link grow until it fills the card; the earlier
+// version instead dropped chips in the browser, which was worse: the search box
+// still matched the dropped words.
+const maxTags = 8
+
 // Config is the root of nav.yaml.
 type Config struct {
 	Site   Site    `yaml:"site" json:"site"`
@@ -618,7 +624,13 @@ func (c *Config) normalize() ([]string, error) {
 					gi, li, l.Name, l.Icon)
 				l.Icon = ""
 			}
-			l.Tags = cleanList(l.Tags)
+			// Cosmetic, like the other ignored values: the page still works,
+			// but say so rather than silently dropping chips.
+			if n := nonEmpty(l.Tags); n > maxTags {
+				warn("groups[%d].links[%d] (%s).tags: keeping the first %d of %d",
+					gi, li, l.Name, maxTags, n)
+			}
+			l.Tags = cleanList(l.Tags, maxTags)
 			links = append(links, l)
 		}
 		g.Links = links
@@ -888,7 +900,22 @@ func safeRepoPath(v string) bool {
 	return true
 }
 
-func cleanList(in []string) []string {
+// nonEmpty counts the entries a list contributes after trimming, which is how
+// many tags the reader would otherwise see.
+func nonEmpty(in []string) int {
+	n := 0
+	for _, s := range in {
+		if strings.TrimSpace(s) != "" {
+			n++
+		}
+	}
+	return n
+}
+
+// cleanList trims a list, drops the empty entries and caps it at max: one of
+// these lands in every tag chip, and an unbounded list would let a single link
+// grow to fill its card. 0 means no cap.
+func cleanList(in []string, max int) []string {
 	out := make([]string, 0, len(in))
 	for _, s := range in {
 		if s = strings.TrimSpace(s); s != "" {
@@ -897,6 +924,9 @@ func cleanList(in []string) []string {
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	if max > 0 && len(out) > max {
+		out = out[:max]
 	}
 	return out
 }

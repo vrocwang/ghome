@@ -85,7 +85,8 @@ groups:
         description: 自建代码托管          # (空) 副标题，搜索也会匹配它
         icon: auto                       # (auto) auto = 服务端解析并缓存站点图标
                                          #   也可以写图片 URL、/ 开头的同源路径，或一个 emoji
-        tags: [git, 私有]                 # (空) 右侧小标签，搜索也会匹配它
+        tags: [git, 私有]                 # (空) 右侧小标签，最多 8 个（超了会警告并截断）
+                                         #   只在 grid 布局显示；但任何布局下都参与搜索
         hotkey: g                        # (空) 单字符，页面任意位置按下即跳转
         newTab: true                     # (true) false 表示当前标签页打开
         pinned: false                    # (false) true 会提升到页面顶部的置顶区

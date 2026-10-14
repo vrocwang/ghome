@@ -751,3 +751,39 @@ groups:
 		t.Error("Public() mutated the payload it was called on")
 	}
 }
+
+// Tags used to be trimmed to two in the browser while the search box still
+// matched all of them, so a config could carry words that matched nothing
+// visible. The cap belongs here: it is applied once and it is announced.
+func TestTagsAreCappedWithAWarning(t *testing.T) {
+	doc := `
+groups:
+  - name: g
+    links:
+      - {name: a, url: https://a.example.com, tags: [t1, t2, t3, t4, t5, t6, t7, t8, t9, t10]}
+      - {name: b, url: https://b.example.com, tags: ["", "  x  ", "   "]}
+`
+	cfg, warnings, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	if got := len(cfg.Groups[0].Links[0].Tags); got != maxTags {
+		t.Errorf("tags on the first link = %d, want the cap %d", got, maxTags)
+	}
+	if got := cfg.Groups[0].Links[0].Tags; got[len(got)-1] != "t8" {
+		t.Errorf("tags = %v, want the first %d kept in order", got, maxTags)
+	}
+	if !containsSubstring(warnings, "keeping the first 8 of 10") {
+		t.Errorf("warnings = %v, want one that says the list was cut", warnings)
+	}
+
+	// Blank entries are dropped, not counted, and surviving ones are trimmed.
+	short := cfg.Groups[0].Links[1].Tags
+	if len(short) != 1 || short[0] != "x" {
+		t.Errorf("tags = %v, want [x]", short)
+	}
+	if containsSubstring(warnings, "links[1]") {
+		t.Errorf("warnings = %v: a link within the cap must not be warned about", warnings)
+	}
+}

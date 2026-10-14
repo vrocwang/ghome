@@ -469,7 +469,10 @@ kbd {
 .hue-6 { background: #b0872a; } .hue-7 { background: #5c6f87; }
 .hue-8 { background: #3f8f4f; } .hue-9 { background: #b4513f; }
 
-.link-body { min-width: 0; flex: 1; }
+/* Overflow is the case to design for, not the exception: a long description
+   beside eight tags left this box at zero width, so it takes an equal share of
+   the free space instead of being squeezed out. */
+.link-body { min-width: 0; flex: 1 1 auto; }
 
 .link-name { display: flex; align-items: center; gap: 6px; min-width: 0; font-size: calc(var(--font-size) - 1px); font-weight: 550; }
 /* The text sits in its own box so it can ellipsize inside the flex row. */
@@ -483,7 +486,17 @@ kbd {
   text-overflow: ellipsis;
 }
 
-.link-tags { display: flex; gap: 4px; flex: none; }
+/* The tag list is allowed to shrink and wrap rather than hold its width: it is
+   the least important column, and a fixed-width list pushed the name out of the
+   row entirely once a link carried more than a couple of tags. */
+.link-tags {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 4px;
+  min-width: 0;
+  flex: 1 1 30%;
+}
 .tag {
   font-size: 10.5px;
   padding: 1px 6px;
