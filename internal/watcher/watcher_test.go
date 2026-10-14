@@ -423,3 +423,44 @@ func TestFailedStylesheetReadKeepsThePreviousCopy(t *testing.T) {
 		t.Errorf("a failed read wiped the live stylesheet: ok=%v len=%d", ok, len(css))
 	}
 }
+
+// A kept-back stylesheet leaves the fingerprint alone -- that is the point of
+// keeping it -- so an unchanged-fingerprint early return would keep the new
+// warning out of the store, and out of the page banner, forever.
+func TestWarningsReachTheStoreEvenWhenNothingElseChanged(t *testing.T) {
+	src := &multiSource{css: []byte(".link{color:red}\n")}
+	src.set(docWithCSS, "rev-a")
+	st := store.New()
+	w := New(src, st, time.Minute, discardLogger())
+
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	if w := mustWarnings(t, st); len(w) != 0 {
+		t.Fatalf("warnings = %v, want none after a clean load", w)
+	}
+
+	// The same document and the same stylesheet revision, but now the file is
+	// too big to use, so the previous copy stays in service and a warning exists.
+	src.setCSS([]byte(strings.Repeat("a", maxCustomCSS+1)))
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+
+	warnings := mustWarnings(t, st)
+	if len(warnings) == 0 {
+		t.Fatal("the oversized-stylesheet warning never reached the store")
+	}
+	if css, _, ok := st.CSS(); !ok || !strings.Contains(string(css), "color:red") {
+		t.Errorf("the previous stylesheet should still be in service: ok=%v", ok)
+	}
+}
+
+func mustWarnings(t *testing.T, st *store.Store) []string {
+	t.Helper()
+	payload, ok := st.Get()
+	if !ok {
+		t.Fatal("the store holds nothing")
+	}
+	return payload.Meta.Warnings
+}

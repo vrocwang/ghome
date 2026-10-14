@@ -493,3 +493,35 @@ groups:
 		}
 	}
 }
+
+// A structural error is reported through /healthz and the 503 body of /api/nav,
+// both without a token. The coordinate identifies the line; the entry's name
+// must not appear, because a private entry's name is what the tier withholds.
+func TestParseErrorsDoNotEchoTheEntryName(t *testing.T) {
+	st := store.New()
+	loadErr := st.Load([]byte(`
+groups:
+  - name: public
+    links:
+      - {name: a, url: "https://a.example.com"}
+  - name: secret
+    private: true
+    links:
+      - {name: 财务系统, url: ""}
+`), "rev-1", "test")
+	if loadErr == nil {
+		t.Fatal("the entry with no url was accepted")
+	}
+	if !strings.Contains(loadErr.Error(), "groups[1].links[0]") {
+		t.Errorf("error = %v, want it to carry the coordinate", loadErr)
+	}
+
+	srv, _ := newTestServer(t, Options{Store: st})
+	for _, path := range []string{"/healthz", "/api/nav"} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if body := rec.Body.String(); strings.Contains(body, "财务系统") {
+			t.Errorf("%s (%d) leaks the entry name:\n%s", path, rec.Code, body)
+		}
+	}
+}

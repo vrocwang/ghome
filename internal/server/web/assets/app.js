@@ -397,7 +397,9 @@
       list.appendChild(el('li', null, warning));
     });
     if (warnings.length > MAX_BANNER_ITEMS) {
-      list.appendChild(el('li', null, '还有 ' + (warnings.length - MAX_BANNER_ITEMS) + ' 处，详见 /healthz'));
+      // /healthz is unauthenticated and no longer carries warnings, so the log
+      // is where the rest of them are.
+      list.appendChild(el('li', null, '还有 ' + (warnings.length - MAX_BANNER_ITEMS) + ' 处，详见进程日志'));
     }
     body.appendChild(list);
     els.banner.appendChild(body);

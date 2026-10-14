@@ -74,8 +74,9 @@
 `lastError` 仍然保留，因为监控需要它判断 `degraded`。
 
 > 配置**解析失败**时（见 [校验分级](../README.md#校验分级)），`/api/nav` 的 503 与 `/healthz` 的
-> `lastError` 会给出拒绝原因，但**不会回显出错的值**——`url` 可能带着令牌，而 Go 自己
-> `url.Parse` 的错误文本会把整条输入原样引用。所以报错只说明是哪种问题（不可解析 / 缺 scheme /
-> 用了危险协议 / 缺 host），定位靠错误里的 `groups[i].links[j]`（或 `search.engines[i]`）坐标。
+> `lastError` 会给出拒绝原因，但**既不会回显出错的值、也不会回显条目名**——前者可能带着
+> 令牌，后者属于私密条目，而这个接口不鉴权。所以报错只说明是哪种问题（不可解析 / 缺 scheme /
+> 用了危险协议 / 缺 host），定位靠错误里的 `groups[i].links[j]`（或 `search.engines[i]`）坐标，
+> 行号就是你在 `nav.yaml` 里看到的行号。
 
 访问日志**只记路径，不记查询串**：`/api/icon` 的 query 里带着配置的链接 URL。

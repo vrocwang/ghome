@@ -87,22 +87,20 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	// Ignore pushes to other branches: only the branch we actually read from
 	// should cause a reload.
 	//
-	// Both sides are normalised rather than one prefix being pasted onto the
-	// configured value: a --branch written as "refs/heads/main" used to be
-	// compared against "refs/heads/refs/heads/main", which ignored every push
-	// while still answering 202 -- a silent freeze, the worst way for an update
-	// path to fail. Doing it here rather than only in main.go means the option
-	// means the same thing however the server was built.
-	if want := branchName(s.opts.Branch); want != "" && payload.Ref != "" {
-		if branchName(payload.Ref) != want {
-			s.log.Info("webhook ignored: push is for another branch",
-				"ref", payload.Ref, "want", want, "remote", clientIP(r))
-			s.writeJSON(w, http.StatusAccepted, map[string]string{
-				"status": "ignored",
-				"reason": "ref " + payload.Ref + " is not " + want,
-			})
-			return
-		}
+	// The filter may be a bare name or a full ref, and both spellings of the
+	// pushed ref have to be accepted: a --branch written as "refs/heads/main"
+	// used to be pasted onto another prefix and never matched, which ignored
+	// every push while still answering 202 -- a silent freeze, the worst way for
+	// an update path to fail. A full ref in the option is matched exactly, so a
+	// config pinned to a tag keeps reloading on that tag.
+	if !matchesRef(s.opts.Branch, payload.Ref) {
+		s.log.Info("webhook ignored: push is for another ref",
+			"ref", payload.Ref, "want", s.opts.Branch, "remote", clientIP(r))
+		s.writeJSON(w, http.StatusAccepted, map[string]string{
+			"status": "ignored",
+			"reason": "ref " + payload.Ref + " is not " + s.opts.Branch,
+		})
+		return
 	}
 
 	if s.opts.Trigger != nil {
@@ -172,15 +170,20 @@ func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
 }
 
-// branchName reduces either spelling of a branch to its short name, so
-// "refs/heads/main" and "main" compare equal, wherever the value came from.
-//
-// Only the heads prefix is stripped. A tag or a pull-request ref keeps its whole
-// path, so it can never be mistaken for a branch of the same name: a tag named
-// "main" must not reload the page just because a branch called main is watched.
-func branchName(ref string) string {
-	ref = strings.TrimSpace(ref)
-	return strings.TrimPrefix(ref, "refs/heads/")
+// matchesRef reports whether a push to ref should reload, given the configured
+// filter. Both spellings of the pushed ref are accepted for a bare filter name;
+// a full ref in the filter ("refs/tags/v1.0") is matched exactly.
+func matchesRef(want, ref string) bool {
+	want, ref = strings.TrimSpace(want), strings.TrimSpace(ref)
+	if want == "" || ref == "" {
+		// No filter, or a payload that does not say which ref moved: reloading
+		// is the safe direction -- a missed update is worse than a spare poll.
+		return true
+	}
+	if strings.HasPrefix(want, "refs/") {
+		return ref == want
+	}
+	return ref == want || ref == "refs/heads/"+want || ref == "refs/tags/"+want
 }
 
 func shorten(sha string) string {

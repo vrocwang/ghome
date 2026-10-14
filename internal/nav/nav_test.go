@@ -178,14 +178,20 @@ groups:
 		t.Fatal("Parse() accepted a broken document")
 	}
 	msg := err.Error()
+	// The coordinates, not the names: this text reaches /healthz and the 503
+	// body of /api/nav, which answer without a token, and a name is exactly what
+	// the private tier withholds. The line can be found from nav.yaml.
 	for _, want := range []string{
 		"groups[0].links[0]: name is required",
-		"groups[0].links[1] (NoURL): url is required",
-		"groups[0].links[2] (BadScheme).url",
+		"groups[0].links[1]: url is required",
+		"groups[0].links[2].url",
 	} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q is missing %q", msg, want)
 		}
+	}
+	if strings.Contains(msg, "NoURL") || strings.Contains(msg, "BadScheme") {
+		t.Errorf("error %q echoes the entry name", msg)
 	}
 }
 

@@ -22,6 +22,7 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -472,7 +473,11 @@ func Parse(data []byte) (*Config, []string, error) {
 	// quoted out of habit. Applied to the tree, both passes see one document.
 	coerceBools(node)
 
-	warnings, err := collectUnknownFields(node)
+	// The strict pass reads the original bytes -- so its "line N" is the line
+	// the author wrote -- while the lenient pass reads the coerced tree. A
+	// written boolean therefore fails the strict pass first; boolLines is how
+	// that expected complaint is told apart from a real type error.
+	warnings, err := collectUnknownFields(data, boolLines(node))
 	if err != nil {
 		return nil, nil, err
 	}
@@ -565,9 +570,12 @@ func parseBoolWord(v string) (string, bool) {
 // collectUnknownFields runs a strict decode purely to catch typo'd keys, which
 // are reported as warnings rather than failures. Type mismatches and malformed
 // documents stay fatal.
-func collectUnknownFields(doc *yaml.Node) ([]string, error) {
+func collectUnknownFields(data []byte, coerced map[int]bool) ([]string, error) {
+	dec := yaml.NewDecoder(bytes.NewReader(data))
+	dec.KnownFields(true)
+
 	var probe Config
-	err := strictDecode(doc, &probe)
+	err := dec.Decode(&probe)
 	if err == nil {
 		return nil, nil
 	}
@@ -579,11 +587,16 @@ func collectUnknownFields(doc *yaml.Node) ([]string, error) {
 
 	var warnings, fatal []string
 	for _, msg := range typeErr.Errors {
-		if isUnknownField(msg) {
+		switch {
+		case isUnknownField(msg):
 			warnings = append(warnings, "ignored unknown field ("+msg+")")
-			continue
+		case atCoercedBool(msg, coerced):
+			// coerceBools accepts a written boolean, and the lenient pass below
+			// decodes the coerced tree. Not fatal here, and not worth a warning
+			// either: "false" was understood.
+		default:
+			fatal = append(fatal, msg)
 		}
-		fatal = append(fatal, msg)
 	}
 	if len(fatal) > 0 {
 		return warnings, fmt.Errorf("invalid yaml: %s", strings.Join(fatal, "; "))
@@ -595,20 +608,54 @@ func isUnknownField(msg string) bool {
 	return strings.Contains(msg, "not found in type")
 }
 
-// strictDecode decodes a tree with unknown keys treated as errors. It takes the
-// tree rather than the bytes so that the coercion in Parse applies to both
-// passes; yaml.NewDecoder only accepts bytes.
-func strictDecode(doc *yaml.Node, into any) error {
-	var buf bytes.Buffer
-	enc := yaml.NewEncoder(&buf)
-	if err := enc.Encode(doc); err != nil {
-		return err
-	}
-	_ = enc.Close()
+// boolLines is the set of line numbers holding a value for a boolean field.
+//
+// yaml.v3's type errors do not name the field ("line 6: cannot unmarshal !!str
+// `false` into bool"), so the line is the only handle on what complained -- and
+// the line is worth keeping, because that is what sends the reader to the right
+// row of nav.yaml.
+func boolLines(n *yaml.Node) map[int]bool {
+	out := map[int]bool{}
+	boolLinesInto(n, out)
+	return out
+}
 
-	dec := yaml.NewDecoder(&buf)
-	dec.KnownFields(true)
-	return dec.Decode(into)
+func boolLinesInto(n *yaml.Node, out map[int]bool) {
+	if n == nil {
+		return
+	}
+	switch n.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, child := range n.Content {
+			boolLinesInto(child, out)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key, value := n.Content[i], n.Content[i+1]
+			if boolFields[key.Value] && value.Kind == yaml.ScalarNode {
+				out[value.Line] = true
+			}
+			boolLinesInto(value, out)
+		}
+	}
+}
+
+// atCoercedBool reports whether this complaint is about a value coerceBools
+// already understood.
+func atCoercedBool(msg string, coerced map[int]bool) bool {
+	if !strings.Contains(msg, "into bool") {
+		return false
+	}
+	rest, ok := strings.CutPrefix(msg, "line ")
+	if !ok {
+		return false
+	}
+	num, _, ok := strings.Cut(rest, ":")
+	if !ok {
+		return false
+	}
+	line, err := strconv.Atoi(strings.TrimSpace(num))
+	return err == nil && coerced[line]
 }
 
 // problems accumulates every validation error so one push reports all of them
@@ -718,10 +765,15 @@ func (c *Config) normalize() ([]string, error) {
 			if l.Name == "" {
 				p.addf("groups[%d].links[%d]: name is required", gi, li)
 			}
+			// No entry name in these two: unlike the warnings below, this text
+			// travels through /healthz and the 503 body of /api/nav, both of
+			// which answer without a token -- and a private entry's name is
+			// exactly what the private tier exists to withhold. The coordinate
+			// identifies the line in nav.yaml just as well.
 			if l.URL == "" {
-				p.addf("groups[%d].links[%d] (%s): url is required", gi, li, l.Name)
+				p.addf("groups[%d].links[%d]: url is required", gi, li)
 			} else if err := checkURL(l.URL); err != nil {
-				p.addf("groups[%d].links[%d] (%s).url: %v", gi, li, l.Name, err)
+				p.addf("groups[%d].links[%d].url: %v", gi, li, err)
 			}
 			if len([]rune(l.Hotkey)) > 1 {
 				warn("groups[%d].links[%d] (%s).hotkey: %q is not a single character, ignored",

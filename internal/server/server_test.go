@@ -154,21 +154,47 @@ func TestWebhookAcceptsAFullRefInTheBranchOption(t *testing.T) {
 	}
 }
 
-// A tag must not be mistaken for a branch of the same name: only the heads
-// prefix is stripped.
-func TestWebhookDoesNotMatchATagAsABranch(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+// A bare filter name matches the tag of the same name too: nothing in the config
+// says which of the two it means. A full ref does not -- pinning to a tag must
+// keep reloading on that tag, and must not reload on a branch of the same name.
+func TestWebhookFilterMatching(t *testing.T) {
+	cases := []struct {
+		want, ref string
+		reload    bool
+	}{
+		{"", "refs/heads/anything", true},            // no filter
+		{"main", "refs/heads/main", true},            // bare name, branch
+		{"main", "refs/tags/main", true},             // bare name, tag of the same name
+		{"main", "refs/heads/other", false},          // another branch
+		{"refs/heads/main", "refs/heads/main", true}, // full ref, exact
+		{"refs/heads/main", "refs/tags/main", false}, // full ref does not drift
+		{"refs/tags/v1.0", "refs/tags/v1.0", true},   // pinned to a tag
+		{"refs/tags/v1.0", "refs/heads/v1.0", false},
+		{"v1.0", "refs/tags/v1.0", true},    // bare tag name, lenient
+		{"main", "refs/pull/7/head", false}, // never a branch
+	}
+	for _, tc := range cases {
+		srv, counter := newTestServer(t, Options{Branch: tc.want, WebhookSecret: "s3cret"})
+		body := `{"ref":"` + tc.ref + `","repository":{"full_name":"acme/nav"}}`
+		postWebhook(t, srv, body, map[string]string{
+			"X-Gitea-Event":     "push",
+			"X-Gitea-Signature": sign(t, body, "s3cret"),
+		})
+		got := counter.n == 1
+		if got != tc.reload {
+			t.Errorf("Branch=%q ref=%q: reloaded=%v, want %v", tc.want, tc.ref, got, tc.reload)
+		}
+	}
 
-	body := `{"ref":"refs/tags/main","repository":{"full_name":"acme/nav"}}`
-	rec := postWebhook(t, srv, body, map[string]string{
+	// A payload with no ref at all is not a reason to skip an update.
+	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	body := `{"repository":{"full_name":"acme/nav"}}`
+	postWebhook(t, srv, body, map[string]string{
 		"X-Gitea-Event":     "push",
 		"X-Gitea-Signature": sign(t, body, "s3cret"),
 	})
-	if counter.n != 0 {
-		t.Errorf("trigger ran %d times, want 0: a tag named main is not the branch main", counter.n)
-	}
-	if !strings.Contains(rec.Body.String(), "ignored") {
-		t.Errorf("body = %s, want an ignored notice", rec.Body)
+	if counter.n != 1 {
+		t.Errorf("a push event without a ref reloaded %d times, want 1", counter.n)
 	}
 }
 

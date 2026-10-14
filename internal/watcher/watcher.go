@@ -246,7 +246,12 @@ func (w *Watcher) refresh(ctx context.Context) error {
 	warnings = append(warnings, extraWarnings...)
 
 	fingerprint := snap.Rev + "|" + cssRev
-	if w.store.Loaded() && fingerprint == w.fingerprint {
+	// The warnings take part: an unusable stylesheet leaves the fingerprint
+	// alone (the previous stylesheet is still in service, and that is the point),
+	// so returning early here would keep the new warning out of the store -- out
+	// of the page banner -- forever, while still logging it on every poll.
+	haveWarnings := len(warnings) > 0
+	if w.store.Loaded() && fingerprint == w.fingerprint && !haveWarnings {
 		// Clearing the error here means a recovered git host stops being
 		// reported as failing on the next poll.
 		w.store.SetError(nil)

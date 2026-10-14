@@ -158,7 +158,7 @@ func run() error {
 		applyConfig(&payload.Config)
 	}
 
-	branch := branchFilter(o.branch, src)
+	branch := refFilter(o.branch, src)
 
 	srv, err := server.New(server.Options{
 		Store:         st,
@@ -652,52 +652,37 @@ func isForge(kind string) bool {
 	return false
 }
 
-// branchFilter is the ref the webhook must match, or "" to accept any.
+// refFilter is the ref the webhook must match, or "" to accept any.
 //
-// Both --branch and a derived --forge-ref may be written the way git writes a
-// ref ("refs/heads/main") or the way a person does ("main"). The result is
-// always the short form, and the webhook normalises the pushed ref the same way;
-// a value that still carried its prefix would never match and every push would
-// be dropped in silence.
+// The value may be written the way git writes a ref ("refs/heads/main",
+// "refs/tags/v1.0") or the way a person does ("main"). A full ref is kept as it
+// is and matched exactly, which is how a config pinned to a tag keeps reloading
+// on that tag. A bare name stays bare and the webhook accepts either the branch
+// or the tag of that name -- the lenient reading -- because nothing here can
+// tell the two apart.
 //
-// Anything that is not a branch name (a tag, a commit, a bare SHA) yields no
-// filter on purpose: for those, a push to any branch can change what is read,
-// so filtering would be the thing that loses an update.
-func branchFilter(flag string, src source.Source) string {
+// A commit or an abbreviated object name yields no filter on purpose: a push to
+// any ref can change what those resolve to, so filtering would be the thing that
+// loses an update.
+func refFilter(flag string, src source.Source) string {
 	if want := strings.TrimSpace(flag); want != "" {
-		if branch, ok := branchOnlyRef(want); ok {
-			return branch
-		}
-		return ""
+		return refOnly(want)
 	}
 	g, ok := src.(*source.Gitea)
 	if !ok {
 		return ""
 	}
-	if branch, ok := branchOnlyRef(g.Ref()); ok {
-		return branch
-	}
-	return ""
+	return refOnly(g.Ref())
 }
 
-// branchOnlyRef normalises a branch reference, and reports false when the value
-// names something else: a tag, a commit, or a full object name.
-func branchOnlyRef(ref string) (string, bool) {
+// refOnly normalises a configured ref, or returns "" when it names a commit
+// rather than a branch or a tag.
+func refOnly(ref string) string {
 	ref = strings.TrimSpace(ref)
-	if ref == "" {
-		return "", false
-	}
-	switch {
-	case strings.HasPrefix(ref, "refs/heads/"):
-		ref = strings.TrimPrefix(ref, "refs/heads/")
-	case strings.HasPrefix(ref, "refs/"):
-		// refs/tags/v1, refs/pull/7/head, ... -- not a branch.
-		return "", false
-	}
 	if ref == "" || looksLikeCommit(ref) || isHex(ref) {
-		return "", false
+		return ""
 	}
-	return ref, true
+	return ref
 }
 
 // isHex reports whether s is an abbreviated git object name. looksLikeCommit

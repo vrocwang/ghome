@@ -486,9 +486,13 @@ kbd {
   text-overflow: ellipsis;
 }
 
-/* The tag list is allowed to shrink and wrap rather than hold its width: it is
-   the least important column, and a fixed-width list pushed the name out of the
-   row entirely once a link carried more than a couple of tags. */
+/* The tag list shrinks and wraps rather than holding its width: it is the least
+   important column, and a fixed-width list pushed the name out of the row
+   entirely once a link carried more than a couple of tags.
+   Overflow is clipped and a chip that cannot fit is ellipsised. Without this a
+   single long tag widened the list past its share and the chips were painted
+   over the icon and the link name -- the row's own scrollWidth does not see that,
+   because the overflow is on the left. */
 .link-tags {
   display: flex;
   flex-wrap: wrap;
@@ -496,6 +500,7 @@ kbd {
   gap: 4px;
   min-width: 0;
   flex: 1 1 30%;
+  overflow: hidden;
 }
 .tag {
   font-size: 10.5px;
@@ -504,6 +509,8 @@ kbd {
   color: var(--faint);
   background: var(--sunken);
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .hotkey { flex: none; }

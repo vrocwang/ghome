@@ -517,7 +517,7 @@ func TestProberIsGivenItsTargetsBeforeItsFirstRound(t *testing.T) {
 // main.go derives from --branch / --forge-ref. A value that still carries its
 // "refs/heads/" prefix used to be pasted onto another one and never matched, so
 // every push was ignored while the endpoint still answered 202.
-func TestBranchFilterNormalisesRefs(t *testing.T) {
+func TestRefFilterKeepsFullRefs(t *testing.T) {
 	gitea := func(ref string) source.Source {
 		t.Helper()
 		s, err := source.NewGitea(source.GiteaOptions{
@@ -537,14 +537,14 @@ func TestBranchFilterNormalisesRefs(t *testing.T) {
 		notes string
 	}{
 		{"default bare branch", "", "main", "main", ""},
-		{"ref written in full", "", "refs/heads/main", "main", ""},
+		{"bare ref stays bare", "", "refs/heads/main", "refs/heads/main", "matched exactly by the webhook"},
 		{"explicit bare branch", "main", "release", "main", ""},
-		{"explicit full ref", "refs/heads/main", "release", "main", ""},
+		{"explicit full ref", "refs/heads/main", "release", "refs/heads/main", ""},
 		{"nested branch", "", "feature/nav", "feature/nav", ""},
-		{"full commit", "", strings.Repeat("a", 40), "", "a push to any branch can move a pinned commit"},
+		{"bare tag name", "", "v1.2.3", "v1.2.3", "nothing here can tell a tag from a branch"},
+		{"tag ref is kept", "", "refs/tags/v1.2.3", "refs/tags/v1.2.3", "so a push to that tag still reloads"},
+		{"full commit", "", strings.Repeat("a", 40), "", "a push to any ref can move a pinned commit"},
 		{"short sha", "", "abc1234", "", "looksLikeCommit only accepted a full one"},
-		{"tag", "", "v1.2.3", "v1.2.3", "a tag name is still not a branch"},
-		{"tag ref", "", "refs/tags/v1.2.3", "", "never filter on a tag"},
 		{"file source", "main", "main", "main", ""},
 	}
 
@@ -558,8 +558,8 @@ func TestBranchFilterNormalisesRefs(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			if got := branchFilter(tc.flag, src); got != tc.want {
-				t.Errorf("branchFilter(%q, ref %q) = %q, want %q (%s)",
+			if got := refFilter(tc.flag, src); got != tc.want {
+				t.Errorf("refFilter(%q, ref %q) = %q, want %q (%s)",
 					tc.flag, tc.ref, got, tc.want, tc.notes)
 			}
 		})
