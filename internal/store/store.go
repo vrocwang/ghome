@@ -77,14 +77,24 @@ func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings [
 
 // Load parses raw and publishes it. It is used to seed the store from the cache
 // file and by tests.
-func (s *Store) Load(raw []byte, rev, src string) error {
+//
+// css carries the stylesheet cached alongside the config: css[0] is its bytes
+// and css[1] its revision. It is variadic so that seeding a store with a
+// document alone stays the short form. Installing both in one Publish is what
+// keeps a restored store from serving the page with the styling missing.
+func (s *Store) Load(raw []byte, rev, src string, css ...string) error {
 	cfg, warnings, err := nav.Parse(raw)
 	if err != nil {
 		s.SetError(err)
 		s.setWarnings(warnings)
 		return err
 	}
-	s.Publish(cfg, raw, rev, src, warnings, nil, "")
+	var cssData []byte
+	var cssRev string
+	if len(css) >= 2 {
+		cssData, cssRev = []byte(css[0]), css[1]
+	}
+	s.Publish(cfg, raw, rev, src, warnings, cssData, cssRev)
 	return nil
 }
 
@@ -128,7 +138,9 @@ func (s *Store) LastError() error {
 }
 
 // Warnings returns the warnings from the most recent attempt, whether or not it
-// succeeded, so /healthz can report a typo even while a stale config is live.
+// succeeded. The watcher logs them and the page shows them once unlocked; the
+// unauthenticated /healthz deliberately carries none, because the text names
+// the entry it came from.
 func (s *Store) Warnings() []string {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

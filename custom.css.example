@@ -21,7 +21,7 @@
 
 /* ---- 示例：只给第一个分组加一条强调边 ---- */
 /*
-.groups .group:first-child {
+.group-grid .group:first-child {
   box-shadow: 0 0 0 1px var(--accent), var(--card-shadow);
 }
 */

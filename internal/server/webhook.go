@@ -86,8 +86,16 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 
 	// Ignore pushes to other branches: only the branch we actually read from
 	// should cause a reload.
+	//
+	// The comparison strips the ref prefix rather than pasting one on. The
+	// configured value may already be written as "refs/heads/main", and
+	// comparing that against "refs/heads/"+"refs/heads/main" would ignore every
+	// push while still answering 202 -- a silent freeze, which is the worst way
+	// for an update path to fail.
 	if want := s.opts.Branch; want != "" && payload.Ref != "" {
-		if payload.Ref != "refs/heads/"+want && payload.Ref != "refs/tags/"+want {
+		if trimRefPrefix(payload.Ref) != want {
+			s.log.Info("webhook ignored: push is for another branch",
+				"ref", payload.Ref, "want", want, "remote", clientIP(r))
 			s.writeJSON(w, http.StatusAccepted, map[string]string{
 				"status": "ignored",
 				"reason": "ref " + payload.Ref + " is not " + want,
@@ -161,6 +169,19 @@ func hmacMatches(sig string, body []byte, secret string, hash func() hash.Hash, 
 
 func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
+}
+
+// trimRefPrefix reduces a full git ref to its short name, so "refs/heads/main"
+// and "main" compare equal. A tag or a pull request ref keeps its prefix on
+// purpose: it can then never be mistaken for a branch of the same name.
+func trimRefPrefix(ref string) string {
+	ref = strings.TrimSpace(ref)
+	for _, prefix := range []string{"refs/heads/", "refs/tags/"} {
+		if strings.HasPrefix(ref, prefix) {
+			return strings.TrimPrefix(ref, prefix)
+		}
+	}
+	return ref
 }
 
 func shorten(sha string) string {

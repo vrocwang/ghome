@@ -11,7 +11,9 @@
 //   - Cosmetic problems (an unknown field, an unusable colour value) only
 //     produce warnings, because rejecting an entire navigation page over one
 //     typo in an optional key is a worse outcome than serving the page without
-//     that one key applied. Warnings surface through /healthz and the UI.
+//     that one key applied. Warnings surface in the process log and in the page
+//     once unlocked; the unauthenticated /healthz carries none of them, because
+//     their text names the entry they came from.
 package nav
 
 import (
@@ -407,9 +409,16 @@ func (c *Config) PrivateEntries() int {
 func (p Payload) Public() Payload {
 	out := p
 	out.Config = *p.Config.Public()
+	// The counts have to describe the document actually being served. Leaving
+	// them whole-config made the page report "5 个链接 · 3 个分组" over a
+	// filtered list of two, and told a locked caller how many private groups
+	// and pinned entries exist.
+	out.Meta.GroupCount = len(out.Config.Groups)
+	out.Meta.LinkCount = out.Config.LinkCount()
+	out.Meta.PinnedCount = out.Config.PinnedCount()
 	// Warnings name the entry they came from -- "groups[0].links[0] (日记).hotkey:
 	// ..." -- so they would give away exactly what the filtering just removed.
-	// The operator still sees them in /healthz, and in the page once unlocked.
+	// The operator still sees them in the log, and in the page once unlocked.
 	out.Meta.Warnings = nil
 	return out
 }
@@ -716,7 +725,11 @@ var dangerousSchemes = map[string]bool{
 func checkURL(raw string) error {
 	u, err := url.Parse(raw)
 	if err != nil {
-		return fmt.Errorf("not a valid url: %w", err)
+		// url.Parse's own message quotes the input verbatim, and this text ends
+		// up in /healthz, in the 503 body of /api/nav and in the log. A link
+		// marked private may well carry a token in its query, so the raw value
+		// is never repeated back: the location in nav.yaml says where to look.
+		return errors.New("not a parseable url (check the characters; the value is not echoed here because it may be private)")
 	}
 	scheme := strings.ToLower(u.Scheme)
 	switch {

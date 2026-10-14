@@ -40,9 +40,10 @@ style:
   iconSize: 20            # (20) 图标边长，像素，12~64
   density: comfortable    # comfortable | compact
   cardStyle: soft         # soft | flat | strong
-  # 指向同一个仓库里的样式表，内容会追加到 /theme.css 后面。
+  # 指向同一个仓库里的样式表（最大 512KB），内容会追加到 /theme.css 后面。
   # 想大改样式时用它，改完 push 即生效，不需要碰 ghome 的代码。
-  customCss: "custom.css"
+  # 默认注释掉：仓库里只有 custom.css.example，直接打开会得到一条"读不到"的告警。
+  # customCss: "custom.css"
 
 # ---------------------------------------------------------------- 搜索
 search:
@@ -52,7 +53,7 @@ search:
                           #       名称/描述/标签过滤下面的链接，不需要外部服务
     # 内部导航页里真正有用的是接内网自己的检索
     - name: 内网检索
-      url: "https://search.example.com/?q={q}"     # 不写 keyword 就是默认引擎
+      url: "https://search.example.com/?q={q}"     # 不带 keyword 时用的就是列表第一个
     - name: Wiki
       keyword: w          # 输入 "w 关键词" 回车直接用这个引擎搜
       url: "https://wiki.example.com/search?q={q}"  # {q} 是必填占位符
@@ -77,6 +78,7 @@ groups:
     icon: "⌨️"             # (空) 显示在分组标题前
     description: 日常开发    # (空)
     color: "#2f9e6f"       # (空) 这组的主色，用于图标底和卡片描边
+    private: false         # (false) true = 整组隐藏（连分组名），见 README「私密链接」
     links:
       - name: Gitea                      # (必填)
         url: https://git.example.com     # (必填)
@@ -88,6 +90,7 @@ groups:
         newTab: true                     # (true) false 表示当前标签页打开
         pinned: false                    # (false) true 会提升到页面顶部的置顶区
         probe: true                      # (true) false 表示这个链接不参与状态探测
+        private: false                   # (false) true = 只有持配置仓读权限令牌的人才看得到
 
       - name: 跳板机
         url: ssh://git@10.0.0.5:2222     # 除 javascript:/data: 等危险协议外都允许
@@ -113,4 +116,4 @@ groups:
 #   * engines[].url 必须包含 {q}
 #   * style 里颜色只接受 #hex / rgb() / hsl() / 颜色关键字，字体只接受字体栈字符
 #   * style.customCss 必须是仓库内的相对路径，且以 .css 结尾
-#   * 字段名拼错不会报错，只会出现在页面顶部的提示条和 /healthz 的 warnings 里
+#   * 字段名拼错不会报错，只会出现在页面顶部的提示条（解锁后可见）和进程日志里

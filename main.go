@@ -127,17 +127,25 @@ func run() error {
 			log.Warn("nav.yaml marks entries private but this source cannot verify a viewer token, " +
 				"so they will never be served; private entries need --source=gitea or forgejo")
 		}
+		// Icons are warmed and allowed from the public view only. A host that
+		// only a private entry uses is never served to anyone -- the browser
+		// gets a letter avatar because an <img> cannot carry the viewer token --
+		// so fetching its icon would be a request with no possible reader.
+		//
 		// IconURLs, not PageURLs: one URL per host is what the icon endpoint can
 		// ever serve, so warming more than that fetches icons nobody can reach.
-		iconURLs := cfg.IconURLs()
+		iconURLs := cfg.Public().IconURLs()
 		iconCache.Allow(iconURLs)
 		iconCache.Warm(ctx, iconURLs)
+		// Probing is different: a private link is still a service worth
+		// watching for the person who can see it.
 		probes.apply(cfg)
 	}
 
 	watch := watcher.New(src, st, o.poll, log)
 	watch.OnUpdate = func(cfg *nav.Config) {
-		saveCache(o.cacheFile, st.Raw(), log)
+		css, _, _ := st.CSS()
+		saveCache(o.cacheFile, st.Raw(), css, log)
 		applyConfig(cfg)
 	}
 
@@ -150,15 +158,7 @@ func run() error {
 		applyConfig(&payload.Config)
 	}
 
-	branch := o.branch
-	if branch == "" {
-		// Only filter webhook refs when we are actually reading a branch or
-		// tag. Pinned to a commit SHA, a push to any branch could change what
-		// we read, so filtering would silently drop every notification.
-		if g, ok := src.(*source.Gitea); ok && !looksLikeCommit(g.Ref()) {
-			branch = g.Ref()
-		}
-	}
+	branch := branchFilter(o.branch, src)
 
 	srv, err := server.New(server.Options{
 		Store:         st,
@@ -358,7 +358,19 @@ func (p *prober) Snapshot(allow map[string]struct{}) any {
 	return p.current.Snapshot(allow)
 }
 
-// Stats implements server.StatusSource.
+// StatsFor implements server.StatusSource. /healthz is unauthenticated, so the
+// counts have to honour the same visibility rule as /api/status.
+func (p *prober) StatsFor(allow map[string]struct{}) (up, down int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.current == nil {
+		return 0, 0
+	}
+	return p.current.StatsFor(allow)
+}
+
+// Stats reports the unfiltered totals, as the prober itself sees them. It is
+// what the supervisor's own diagnostics and tests use.
 func (p *prober) Stats() (targets, up, down int) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -522,6 +534,11 @@ func newLogger(level string) *slog.Logger {
 
 // loadCache seeds the store from the last good config so a restart while git is
 // unreachable still serves a usable page.
+//
+// The repository stylesheet is cached next to the config and restored with it.
+// Caching only nav.yaml meant that exactly the outage the cache exists for also
+// dropped the styling: the page came back unstyled, and the theme revision gave
+// the browser no reason to fetch anything.
 func loadCache(path string, st *store.Store, log *slog.Logger) {
 	if path == "" {
 		return
@@ -533,19 +550,54 @@ func loadCache(path string, st *store.Store, log *slog.Logger) {
 		}
 		return
 	}
-	if err := st.Load(data, "cache:"+filepath.Base(path), "cache"); err != nil {
-		log.Warn("ignoring an unusable cache file", "path", path, "error", err)
+	css, cssRev := loadCachedCSS(path)
+	var loadErr error
+	if css == nil {
+		// No stylesheet was cached. Passing nothing rather than an empty string
+		// is what keeps "this config has no customCss" distinct from "the file
+		// is empty" in the store.
+		loadErr = st.Load(data, "cache:"+filepath.Base(path), "cache")
+	} else {
+		loadErr = st.Load(data, "cache:"+filepath.Base(path), "cache", string(css), cssRev)
+	}
+	if loadErr != nil {
+		log.Warn("ignoring an unusable cache file", "path", path, "error", loadErr)
 		return
 	}
-	log.Info("serving the cached config until the first fetch succeeds", "path", path)
+	log.Info("serving the cached config until the first fetch succeeds",
+		"path", path, "cached_css", len(css) > 0)
+}
+
+// loadCachedCSS reads the stylesheet cached alongside the config. A missing file
+// is normal: most configs have no customCss at all.
+func loadCachedCSS(cachePath string) ([]byte, string) {
+	cssPath := cachePath + ".css"
+	data, err := os.ReadFile(cssPath)
+	if err != nil || len(data) == 0 {
+		return nil, ""
+	}
+	return data, "cache:" + filepath.Base(cssPath)
 }
 
 // saveCache writes atomically so a crash mid-write cannot leave a truncated
-// file behind.
-func saveCache(path string, data []byte, log *slog.Logger) {
+// file behind. The config and the stylesheet are written in the same step
+// because they are served as a pair: a cache holding one without the other is
+// what produced an unstyled page after a restart.
+func saveCache(path string, data, css []byte, log *slog.Logger) {
 	if path == "" || len(data) == 0 {
 		return
 	}
+	writeAtomic(path, data, log)
+	if len(css) > 0 {
+		writeAtomic(path+".css", css, log)
+		return
+	}
+	// The stylesheet is gone from the repository. Removing the cached copy is
+	// what keeps a restart from resurrecting it.
+	_ = os.Remove(path + ".css")
+}
+
+func writeAtomic(path string, data []byte, log *slog.Logger) {
 	tmp := path + ".tmp"
 	if err := os.WriteFile(tmp, data, 0o600); err != nil {
 		log.Warn("could not write the cache file", "path", path, "error", err)
@@ -598,6 +650,68 @@ func isForge(kind string) bool {
 		return true
 	}
 	return false
+}
+
+// branchFilter is the ref the webhook must match, or "" to accept any.
+//
+// Both --branch and a derived --forge-ref may be written the way git writes a
+// ref ("refs/heads/main") or the way a person does ("main"). The webhook
+// compares against "refs/heads/"+want, so a value that still carries the prefix
+// would never match and every push would be dropped in silence.
+//
+// Anything that is not a branch name (a tag, a commit, a bare SHA) yields no
+// filter on purpose: for those, a push to any branch can change what is read,
+// so filtering would be the thing that loses an update.
+func branchFilter(flag string, src source.Source) string {
+	if want := strings.TrimSpace(flag); want != "" {
+		if branch, ok := branchOnlyRef(want); ok {
+			return branch
+		}
+		return ""
+	}
+	g, ok := src.(*source.Gitea)
+	if !ok {
+		return ""
+	}
+	if branch, ok := branchOnlyRef(g.Ref()); ok {
+		return branch
+	}
+	return ""
+}
+
+// branchOnlyRef normalises a branch reference, and reports false when the value
+// names something else: a tag, a commit, or a full object name.
+func branchOnlyRef(ref string) (string, bool) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" {
+		return "", false
+	}
+	switch {
+	case strings.HasPrefix(ref, "refs/heads/"):
+		ref = strings.TrimPrefix(ref, "refs/heads/")
+	case strings.HasPrefix(ref, "refs/"):
+		// refs/tags/v1, refs/pull/7/head, ... -- not a branch.
+		return "", false
+	}
+	if ref == "" || looksLikeCommit(ref) || isHex(ref) {
+		return "", false
+	}
+	return ref, true
+}
+
+// isHex reports whether s is an abbreviated git object name. looksLikeCommit
+// only accepts a full one; a short SHA is just as certainly not a branch name,
+// and treating it as one would drop every push.
+func isHex(s string) bool {
+	if len(s) < 7 || len(s) > 40 {
+		return false
+	}
+	for _, r := range strings.ToLower(s) {
+		if !strings.ContainsRune("0123456789abcdef", r) {
+			return false
+		}
+	}
+	return true
 }
 
 // looksLikeCommit reports whether ref is a full git object name rather than a

@@ -55,6 +55,11 @@ type shape struct {
 			Name string `json:"name"`
 		} `json:"links"`
 	} `json:"groups"`
+	Meta struct {
+		GroupCount  int `json:"groupCount"`
+		LinkCount   int `json:"linkCount"`
+		PinnedCount int `json:"pinnedCount"`
+	} `json:"meta"`
 	Private *struct {
 		Total  int  `json:"total"`
 		Locked bool `json:"locked"`
@@ -116,6 +121,13 @@ func TestNavWithholdsPrivateEntries(t *testing.T) {
 		}
 		if names := linkNames(got); len(names) != 2 || names[0] != "a" || names[1] != "c" {
 			t.Errorf("links = %v, want [a c]", names)
+		}
+		// The counts describe what is on the page. Leaving them whole-config
+		// made the footer claim links the reader cannot see, and told an
+		// anonymous caller how many private groups exist.
+		if got.Meta.GroupCount != 2 || got.Meta.LinkCount != 2 {
+			t.Errorf("meta counts = %d groups / %d links, want the visible 2/2",
+				got.Meta.GroupCount, got.Meta.LinkCount)
 		}
 	})
 
@@ -305,9 +317,13 @@ func TestNilVerifierRefusesEverything(t *testing.T) {
 	}
 }
 
-// The icon endpoint answering for a private-only host would confirm that host is
-// in the config, which is the same disclosure that /api/status is filtered to
-// avoid. A host a public entry also uses is fine to serve.
+// A host only a private entry uses must answer exactly like a host that is not
+// in the config at all -- same status, and now the same cost. Consulting the
+// verifier here instead made the 404 slow for a hidden host and quick for an
+// unknown one, which confirmed hidden host names to anyone who timed it, and it
+// bought nothing: an <img> cannot carry the viewer token, so a browser could
+// never use an unlocked answer. A host a public entry also uses is fine to
+// serve.
 func TestIconEndpointWithholdsPrivateOnlyHosts(t *testing.T) {
 	st := store.New()
 	if err := st.Load([]byte(`
@@ -323,10 +339,12 @@ groups:
 `), "rev-1", "test"); err != nil {
 		t.Fatalf("Load() error = %v", err)
 	}
+	var checks atomic.Int64
 	srv, _ := newTestServer(t, Options{
 		Store: st,
 		Icons: &fakeIcons{data: []byte("GIF89a"), ct: "image/gif", ok: true},
 		Verify: func(_ context.Context, token string) bool {
+			checks.Add(1)
 			return token == goodToken
 		},
 	})
@@ -341,18 +359,78 @@ groups:
 		return rec.Code
 	}
 
-	if got := icon("only-private.example.com", ""); got != http.StatusNotFound {
-		t.Errorf("a private-only host answered %d to an anonymous caller, want 404", got)
+	// Every caller gets the same answer, including a caller holding a token
+	// that would unlock the link in the page.
+	for _, token := range []string{"", "wrong", goodToken} {
+		if got := icon("only-private.example.com", token); got != http.StatusNotFound {
+			t.Errorf("a private-only host answered %d (token %q), want 404", got, token)
+		}
 	}
-	if got := icon("only-private.example.com", "wrong"); got != http.StatusNotFound {
-		t.Errorf("a private-only host answered %d to a bad token, want 404", got)
-	}
-	if got := icon("only-private.example.com", goodToken); got != http.StatusOK {
-		t.Errorf("a private-only host answered %d to a valid token, want 200", got)
+	// Not asking the forge is what makes the two 404s indistinguishable.
+	if got := checks.Load(); got != 0 {
+		t.Errorf("the verifier was consulted %d times for a private-only host, want 0", got)
 	}
 	// A public entry uses this host, so hiding it would break the public page.
 	if got := icon("shared.example.com", ""); got != http.StatusOK {
 		t.Errorf("a host a public link also uses answered %d, want 200", got)
+	}
+}
+
+// /healthz is unauthenticated. It served the raw warning list -- whose text
+// names the entry it came from -- and probe totals that counted every target,
+// private ones included. Both have to describe the public view only.
+func TestHealthzDoesNotLeakPrivateEntries(t *testing.T) {
+	st := store.New()
+	if err := st.Load([]byte(`
+status:
+  enabled: true
+groups:
+  - name: 公开
+    links:
+      - {name: 百度, url: "https://public.example.com"}
+  - name: 私密
+    private: true
+    links:
+      - {name: 财务系统, url: "https://finance.internal", hotkey: "xy"}
+`), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	results := map[string]status.Result{
+		"https://public.example.com": {State: status.StateUp},
+		"https://finance.internal":   {State: status.StateDown},
+	}
+	srv, _ := newTestServer(t, Options{
+		Store:  st,
+		Status: fakeStatus{results: results},
+	})
+
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	body := rec.Body.String()
+	for _, secret := range []string{"财务系统", "finance.internal"} {
+		if strings.Contains(body, secret) {
+			t.Errorf("/healthz leaks %q:\n%s", secret, body)
+		}
+	}
+
+	var state healthState
+	if err := json.Unmarshal(rec.Body.Bytes(), &state); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	// Only the public probe is counted, so the totals cannot report a withheld
+	// service; the private one is down.
+	if state.ProbesUp != 1 || state.ProbesDown != 0 {
+		t.Errorf("probes up/down = %d/%d, want 1/0", state.ProbesUp, state.ProbesDown)
+	}
+	if state.Groups != 1 || state.Links != 1 {
+		t.Errorf("groups/links = %d/%d, want the public 1/1", state.Groups, state.Links)
+	}
+	if len(state.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none: they name the entry they came from", state.Warnings)
 	}
 }
 
@@ -380,5 +458,38 @@ func TestVerifierIgnoresACancelledCaller(t *testing.T) {
 	}
 	if got := calls.Load(); got != 1 {
 		t.Errorf("check ran %d times, want 1 (the verdict must be cached)", got)
+	}
+}
+
+// A config that fails to parse is reported through the unauthenticated /healthz
+// and through the 503 body of /api/nav. Neither may repeat the offending value:
+// a private link's url can carry a token, and Go's url.Parse error quotes the
+// whole input.
+func TestParseErrorsDoNotEchoPrivateURLs(t *testing.T) {
+	st := store.New()
+	loadErr := st.Load([]byte(`
+groups:
+  - name: public
+    links:
+      - {name: a, url: "https://a.example.com"}
+  - name: secret
+    private: true
+    links:
+      - {name: 日记, url: "https://diary.internal/%zz?token=SUPERSECRET"}
+`), "rev-1", "test")
+	if loadErr == nil {
+		t.Fatal("the broken url was accepted")
+	}
+
+	srv, _ := newTestServer(t, Options{Store: st})
+	for _, path := range []string{"/healthz", "/api/nav"} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		body := rec.Body.String()
+		for _, secret := range []string{"SUPERSECRET", "diary.internal", "%zz"} {
+			if strings.Contains(body, secret) {
+				t.Errorf("%s (%d) leaks %q:\n%s", path, rec.Code, secret, body)
+			}
+		}
 	}
 }

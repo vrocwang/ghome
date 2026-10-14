@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/source"
 	"github.com/vrocwang/ghome/internal/status"
 	"github.com/vrocwang/ghome/internal/store"
 )
@@ -509,5 +510,98 @@ func TestProberIsGivenItsTargetsBeforeItsFirstRound(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Error("no target was probed: the first round ran before the targets were set, " +
 			"so the status lights stay unknown until the next interval")
+	}
+}
+
+// The webhook compares the pushed ref against server.Options.Branch, which
+// main.go derives from --branch / --forge-ref. A value that still carries its
+// "refs/heads/" prefix used to be pasted onto another one and never matched, so
+// every push was ignored while the endpoint still answered 202.
+func TestBranchFilterNormalisesRefs(t *testing.T) {
+	gitea := func(ref string) source.Source {
+		t.Helper()
+		s, err := source.NewGitea(source.GiteaOptions{
+			BaseURL: "https://git.example.com", Owner: "a", Repo: "b", Ref: ref,
+		})
+		if err != nil {
+			t.Fatalf("NewGitea(%q) error = %v", ref, err)
+		}
+		return s
+	}
+
+	cases := []struct {
+		name  string
+		flag  string
+		ref   string
+		want  string
+		notes string
+	}{
+		{"default bare branch", "", "main", "main", ""},
+		{"ref written in full", "", "refs/heads/main", "main", ""},
+		{"explicit bare branch", "main", "release", "main", ""},
+		{"explicit full ref", "refs/heads/main", "release", "main", ""},
+		{"nested branch", "", "feature/nav", "feature/nav", ""},
+		{"full commit", "", strings.Repeat("a", 40), "", "a push to any branch can move a pinned commit"},
+		{"short sha", "", "abc1234", "", "looksLikeCommit only accepted a full one"},
+		{"tag", "", "v1.2.3", "v1.2.3", "a tag name is still not a branch"},
+		{"tag ref", "", "refs/tags/v1.2.3", "", "never filter on a tag"},
+		{"file source", "main", "main", "main", ""},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var src source.Source = gitea(tc.ref)
+			if tc.name == "file source" {
+				var err error
+				src, err = source.NewFile("nav.yaml")
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := branchFilter(tc.flag, src); got != tc.want {
+				t.Errorf("branchFilter(%q, ref %q) = %q, want %q (%s)",
+					tc.flag, tc.ref, got, tc.want, tc.notes)
+			}
+		})
+	}
+}
+
+// The cache exists so a restart during a forge outage still serves a usable
+// page. Caching nav.yaml alone brought the page back without the repository
+// stylesheet, and the theme revision gave the browser no reason to re-fetch.
+func TestCacheRoundTripKeepsTheStylesheet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "cache.yaml")
+	raw := []byte("style:\n  customCss: \"custom.css\"\n" + minimalNav)
+	css := []byte(".link{color:red}\n")
+
+	live := store.New()
+	if err := live.Load(raw, "rev-1", "test", string(css), "css-rev"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	saveCache(path, raw, css, discardLogger())
+
+	restored := store.New()
+	loadCache(path, restored, discardLogger())
+
+	got, rev, ok := restored.CSS()
+	if !ok || !strings.Contains(string(got), "color:red") {
+		t.Fatalf("restored stylesheet: ok=%v rev=%q css=%q", ok, rev, got)
+	}
+	payload, ok := restored.Get()
+	if !ok {
+		t.Fatal("the cached config did not load")
+	}
+	if payload.Meta.ThemeRevision == "" {
+		t.Error("ThemeRevision is empty, so the browser would reuse a stale stylesheet")
+	}
+
+	// A config in the cache with no stylesheet next to it must not resurrect
+	// one: that is how a removed custom.css stops being served.
+	saveCache(path, raw, nil, discardLogger())
+	empty := store.New()
+	loadCache(path, empty, discardLogger())
+	if _, _, ok := empty.CSS(); ok {
+		t.Error("a cached config without a stylesheet restored one")
 	}
 }

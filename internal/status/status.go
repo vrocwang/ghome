@@ -258,6 +258,29 @@ func (p *Prober) Stats() (targets, up, down int) {
 	return targets, up, down
 }
 
+// StatsFor counts only the URLs in allow, so a caller that may not see a link
+// cannot learn its state from the totals either. A nil allow means no
+// restriction, matching Snapshot.
+func (p *Prober) StatsFor(allow map[string]struct{}) (up, down int) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	for _, t := range p.targets {
+		if allow != nil {
+			if _, ok := allow[t]; !ok {
+				continue
+			}
+		}
+		switch p.results[t].State {
+		case StateUp:
+			up++
+		case StateDown:
+			down++
+		}
+	}
+	return up, down
+}
+
 // roundState is the scratch storage one Run call reuses between rounds: a
 // semaphore, one slot per target, and the map being filled. It belongs to the
 // goroutine running Run and so needs no lock of its own.

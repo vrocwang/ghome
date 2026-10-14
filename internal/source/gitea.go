@@ -103,15 +103,29 @@ func NewGitea(o GiteaOptions) (*Gitea, error) {
 	}
 
 	return &Gitea{
-		kind:   kind,
-		base:   base,
-		owner:  strings.TrimSpace(o.Owner),
-		repo:   strings.TrimSpace(o.Repo),
-		ref:    ref,
-		path:   path,
-		token:  strings.TrimSpace(o.Token),
-		client: &http.Client{Timeout: timeout},
+		kind:  kind,
+		base:  base,
+		owner: strings.TrimSpace(o.Owner),
+		repo:  strings.TrimSpace(o.Repo),
+		ref:   ref,
+		path:  path,
+		token: strings.TrimSpace(o.Token),
+		// A redirect is never part of the API contract. Following one would let
+		// whatever sits behind it answer for the repository: an SSO login page
+		// or a proxy error page that returns 200 for everything is exactly what
+		// CanRead must not mistake for a permission.
+		client: &http.Client{
+			Timeout: timeout,
+			CheckRedirect: func(*http.Request, []*http.Request) error {
+				return http.ErrUseLastResponse
+			},
+		},
 	}, nil
+}
+
+// repoResponse is the little of GET /repos/{owner}/{repo} CanRead needs.
+type repoResponse struct {
+	FullName string `json:"full_name"`
 }
 
 // Ref is the configured branch/tag/SHA. The webhook handler uses it to ignore
@@ -150,6 +164,10 @@ func (g *Gitea) FetchPath(ctx context.Context, path string) (Snapshot, error) {
 // This is how a viewer proves it belongs to the group that can already see the
 // config: repository access is the permission, so there is no separate allow
 // list to keep in step with the forge.
+//
+// It is deliberately strict, because a false positive hands over the private
+// entries: the response must be a 200 that names this repository, and a
+// redirect is not followed.
 func (g *Gitea) CanRead(ctx context.Context, token string) bool {
 	if strings.TrimSpace(token) == "" {
 		return false
@@ -172,7 +190,19 @@ func (g *Gitea) CanRead(ctx context.Context, token string) bool {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
-	return resp.StatusCode == http.StatusOK
+	if resp.StatusCode != http.StatusOK {
+		return false
+	}
+
+	// A status code alone is not proof. Anything that answers 200 at this URL
+	// is accepted by the check above, so the body has to be the repository that
+	// was asked for -- otherwise a stray page (a login form, a default site, a
+	// typo'd --forge-url) would unlock the private entries.
+	var repo repoResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&repo); err != nil {
+		return false
+	}
+	return strings.EqualFold(strings.TrimSpace(repo.FullName), g.owner+"/"+g.repo)
 }
 
 func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -348,4 +349,77 @@ func TestRunRecoversQuicklyAfterAFailure(t *testing.T) {
 	src.setErr(nil)
 	src.set(docA, "rev-a")
 	waitFor(t, 4*time.Second, "recovery", func() bool { return st.Loaded() })
+}
+
+// multiSource is a fakeSource that can also read sibling files, which is what
+// style.customCss needs.
+type multiSource struct {
+	fakeSource
+	css    []byte
+	cssErr error
+}
+
+func (m *multiSource) FetchPath(context.Context, string) (source.Snapshot, error) {
+	if m.cssErr != nil {
+		return source.Snapshot{}, m.cssErr
+	}
+	if m.css == nil {
+		return source.Snapshot{}, errors.New("no such file")
+	}
+	return source.Snapshot{Data: m.css, Rev: "css-rev"}, nil
+}
+
+func (m *multiSource) setCSS(css []byte) { m.css = css }
+
+const docWithCSS = "style:\n  customCss: \"custom.css\"\ngroups:\n  - name: A\n    links:\n      - name: One\n        url: https://one.example.com\n"
+
+// An unusable stylesheet is a reason to warn, not a reason to strip the styling
+// off a live page. A failed read already kept the previous copy; an oversized
+// one used to delete it instead.
+func TestOversizedStylesheetKeepsThePreviousCopy(t *testing.T) {
+	src := &multiSource{css: []byte(".link{color:red}\n")}
+	src.set(docWithCSS, "rev-a")
+	st := store.New()
+	w := New(src, st, time.Minute, discardLogger())
+
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	if css, _, ok := st.CSS(); !ok || !strings.Contains(string(css), "color:red") {
+		t.Fatalf("the first stylesheet did not load: ok=%v css=%q", ok, css)
+	}
+
+	// Now the file grows past the limit. The config itself is unchanged.
+	src.setCSS([]byte(strings.Repeat("a", maxCustomCSS+1)))
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+
+	css, _, ok := st.CSS()
+	if !ok || !strings.Contains(string(css), "color:red") {
+		t.Errorf("an oversized stylesheet wiped the live one: ok=%v len=%d", ok, len(css))
+	}
+}
+
+// The same reasoning for a read failure, which was already correct: pin it so
+// the two paths cannot drift apart again.
+func TestFailedStylesheetReadKeepsThePreviousCopy(t *testing.T) {
+	src := &multiSource{css: []byte(".link{color:red}\n")}
+	src.set(docWithCSS, "rev-a")
+	st := store.New()
+	w := New(src, st, time.Minute, discardLogger())
+
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	src.cssErr = errors.New("404: custom.css not found")
+	src.set(docWithCSS, "rev-b")
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+
+	css, _, ok := st.CSS()
+	if !ok || !strings.Contains(string(css), "color:red") {
+		t.Errorf("a failed read wiped the live stylesheet: ok=%v len=%d", ok, len(css))
+	}
 }

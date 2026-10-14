@@ -48,7 +48,10 @@ type StatusSource interface {
 	// may see, and nil means no restriction. Results for anything else are
 	// dropped, because a probe result names the service that was probed.
 	Snapshot(allow map[string]struct{}) any
-	Stats() (targets, up, down int)
+	// StatsFor counts up and down among the URLs the caller may see. It is what
+	// /healthz reports, so it has to honour the same restriction as Snapshot:
+	// a total that counted a withheld link would announce it.
+	StatsFor(allow map[string]struct{}) (up, down int)
 }
 
 // Options configures the HTTP layer.
@@ -93,11 +96,10 @@ type Server struct {
 	assets fs.FS
 
 	// idx caches host -> page URL for /api/icon, rebuilt when the config
-	// revision changes.
-	idxMu        sync.Mutex
-	idx          map[string]string
-	privateHosts map[string]struct{}
-	idxRev       string
+	// revision changes. It holds the public view only.
+	idxMu  sync.Mutex
+	idx    map[string]string
+	idxRev string
 
 	// streams counts open event streams, and streamsDone is closed to ask them
 	// all to finish.
@@ -395,10 +397,18 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 // handleIcon proxies a site's icon through this origin.
 //
 // Two things make this safe: the resolver only serves hosts that appear in the
-// current config (so this is not an open proxy), and the response carries a
+// public config (so this is not an open proxy), and the response carries a
 // locked-down CSP of its own. That second part matters: an SVG fetched from a
 // third party and served from our origin would otherwise be able to run script
 // if someone opened the icon URL directly.
+//
+// The host index is built from the public view, so a host that only a private
+// entry uses is not in it at all: it answers exactly like a host that is not in
+// the config. That also keeps the answer cheap. Consulting the verifier here
+// instead made the 404 slow for a hidden host and quick for an unknown one --
+// a timing oracle that confirmed hidden host names -- and it bought nothing,
+// because an <img> cannot carry the viewer token, so the browser could never
+// use the unlocked answer anyway.
 func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 	if s.opts.Icons == nil {
 		http.NotFound(w, r)
@@ -410,20 +420,7 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	idx := s.hostIndex()
-
-	// A host only private entries use is not something an anonymous caller may
-	// confirm: answering here would say "this nav lists that host". Same reason
-	// /api/status is filtered. The cost is that an unlocked private link shows a
-	// letter avatar, because an <img> cannot carry the token.
-	if _, only := s.privateOnlyHosts()[host]; only {
-		if !s.private.allowed(r.Context(), bearerToken(r)) {
-			http.NotFound(w, r)
-			return
-		}
-	}
-
-	pageURL, ok := idx[host]
+	pageURL, ok := s.hostIndex()[host]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -441,25 +438,20 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 	h := w.Header()
 	h.Set("Content-Type", contentType)
 	// The browser passes a revision in ?v=, so a long cache is safe and saves
-	// re-fetching on every page load.
-	h.Set("Cache-Control", "public, max-age=604800")
+	// re-fetching on every page load. "private" rather than "public": the
+	// response can depend on the caller even though the bytes are the same, and
+	// a shared cache that ignores that could hand a private host's icon, or its
+	// 404, to the wrong caller.
+	h.Set("Cache-Control", "private, max-age=604800")
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	h.Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(data)
 }
 
-// hostIndex maps host -> a configured page URL on that host. It is memoised by
-// config revision because /api/icon is hit once per link on every page load.
-// privateOnlyHosts returns the hostnames no public entry uses. It is filled
-// alongside hostIndex so both come from the same revision.
-func (s *Server) privateOnlyHosts() map[string]struct{} {
-	s.hostIndex()
-	s.idxMu.Lock()
-	defer s.idxMu.Unlock()
-	return s.privateHosts
-}
-
+// hostIndex maps host -> a configured page URL on that host, built from the
+// public view so a private-only host is absent. It is memoised by config
+// revision because /api/icon is hit once per link on every page load.
 func (s *Server) hostIndex() map[string]string {
 	payload, ok := s.store.Get()
 	if !ok {
@@ -472,17 +464,16 @@ func (s *Server) hostIndex() map[string]string {
 		return s.idx
 	}
 
+	public := payload.Public()
 	// Built from IconURLs rather than PageURLs so that this and the warm
 	// prefetch cannot disagree about which URL represents a host.
 	idx := make(map[string]string, 16)
-	for _, raw := range payload.IconURLs() {
-		u, err := url.Parse(raw)
-		if err != nil || u.Host == "" {
-			continue
+	for _, raw := range public.IconURLs() {
+		if u, err := url.Parse(raw); err == nil && u.Host != "" {
+			idx[strings.ToLower(u.Hostname())] = raw
 		}
-		idx[strings.ToLower(u.Hostname())] = raw
 	}
-	s.idx, s.privateHosts, s.idxRev = idx, payload.PrivateOnlyHosts(), payload.Meta.Revision
+	s.idx, s.idxRev = idx, payload.Meta.Revision
 	return idx
 }
 
@@ -729,8 +720,17 @@ type healthState struct {
 	LastError string   `json:"lastError,omitempty"`
 }
 
+// handleHealth is unauthenticated, so it describes the public view only.
+//
+// It uses to leak what /api/nav carefully withholds: the warnings name the entry
+// they came from ("groups[1].links[0] (财务系统).hotkey: ..."), and the probe
+// counters covered every target, private ones included. Everything below is
+// therefore derived from Payload.Public, the same value an anonymous /api/nav
+// would carry.
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	payload, ok := s.store.Get()
+	visible := payload.Public()
+
 	state := healthState{
 		Status:      "ok",
 		Version:     s.opts.Version,
@@ -745,19 +745,21 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 
 	state.Source = s.opts.Source
 	if ok {
-		state.Source = payload.Meta.Source
-		state.Revision = payload.Meta.Revision
-		state.ThemeRevision = payload.Meta.ThemeRevision
-		state.UpdatedAt = payload.Meta.UpdatedAt
-		state.Groups = payload.Meta.GroupCount
-		state.Links = payload.Meta.LinkCount
-		state.ProbesEnabled = payload.Status.Enabled != nil && *payload.Status.Enabled
+		state.Source = visible.Meta.Source
+		state.Revision = visible.Meta.Revision
+		state.ThemeRevision = visible.Meta.ThemeRevision
+		state.UpdatedAt = visible.Meta.UpdatedAt
+		state.Groups = visible.Meta.GroupCount
+		state.Links = visible.Meta.LinkCount
+		state.ProbesEnabled = visible.Status.Enabled != nil && *visible.Status.Enabled
 	} else {
 		state.Status = "starting"
 	}
 
 	if state.ProbesEnabled && s.opts.Status != nil {
-		_, up, down := s.opts.Status.Stats()
+		// Counted against what this caller may see, so the totals cannot report
+		// a service whose link is withheld.
+		up, down := s.opts.Status.StatsFor(visible.VisibleURLs())
 		state.ProbesUp, state.ProbesDown = up, down
 	}
 	if s.opts.Icons != nil {
@@ -765,8 +767,9 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Warnings come from the most recent attempt, so a typo is visible even
-	// while a previously good config is still being served.
-	state.Warnings = s.store.Warnings()
+	// while a previously good config is still being served. The public view has
+	// already dropped the ones that name a withheld entry.
+	state.Warnings = visible.Meta.Warnings
 
 	if err := s.store.LastError(); err != nil {
 		state.LastError = err.Error()

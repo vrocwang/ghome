@@ -584,8 +584,19 @@ func (f fakeStatus) Snapshot(allow map[string]struct{}) any {
 	return out
 }
 func (f fakeStatus) Stats() (int, int, int) {
+	up, down := f.StatsFor(nil)
+	return len(f.results), up, down
+}
+
+// StatsFor mirrors the real prober: counts only what the caller may see.
+func (f fakeStatus) StatsFor(allow map[string]struct{}) (int, int) {
 	up, down := 0, 0
-	for _, r := range f.results {
+	for url, r := range f.results {
+		if allow != nil {
+			if _, ok := allow[url]; !ok {
+				continue
+			}
+		}
 		switch r.State {
 		case status.StateUp:
 			up++
@@ -593,7 +604,7 @@ func (f fakeStatus) Stats() (int, int, int) {
 			down++
 		}
 	}
-	return len(f.results), up, down
+	return up, down
 }
 
 func TestStatusEndpoint(t *testing.T) {
@@ -666,11 +677,14 @@ groups:
 	if state.Status != "ok" {
 		t.Errorf("Status = %q, want ok: a tolerated typo is not an outage", state.Status)
 	}
-	if len(state.Warnings) == 0 {
-		t.Fatal("warnings were not reported")
+	// /healthz is unauthenticated and a warning names the entry it came from
+	// ("groups[0].links[0] (日记).hotkey: ..."), so the response carries none of
+	// them. The operator still gets the full list in the log.
+	if len(state.Warnings) != 0 {
+		t.Errorf("warnings = %v, want none on an unauthenticated endpoint", state.Warnings)
 	}
-	if !strings.Contains(state.Warnings[0], "titel") {
-		t.Errorf("warnings = %v", state.Warnings)
+	if len(st.Warnings()) == 0 {
+		t.Error("the store lost the warnings: they are what the log line reports")
 	}
 }
 

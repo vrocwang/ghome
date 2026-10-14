@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -381,5 +382,62 @@ func TestGiteaDescribeUsesTheConfiguredKind(t *testing.T) {
 	}
 	if forgejo.Ref() != "main" {
 		t.Errorf("Ref() = %q", forgejo.Ref())
+	}
+}
+
+// CanRead is the whole permission model for the private links: any answer it
+// wrongly accepts hands them over, so it is claimed here case by case.
+func TestCanReadIsStrict(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/acme/nav", func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		case "good":
+			_, _ = io.WriteString(w, `{"full_name":"acme/nav","private":true}`)
+		case "case":
+			_, _ = io.WriteString(w, `{"full_name":"ACME/NAV"}`)
+		case "other-repo":
+			// A 200 that is not about this repository at all: a typo'd
+			// --forge-url, or a proxy's default page.
+			_, _ = io.WriteString(w, `{"full_name":"someone/else"}`)
+		case "not-json":
+			_, _ = io.WriteString(w, `<html>login</html>`)
+		case "empty":
+			// A 200 with no body.
+		case "redirect":
+			// An SSO or proxy front end answering with a redirect to a page
+			// that returns 200.
+			http.Redirect(w, r, "/login", http.StatusFound)
+			return
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	})
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `<html><body>sign in</body></html>`)
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	src, err := NewGitea(GiteaOptions{
+		BaseURL: srv.URL, Owner: "acme", Repo: "nav", Ref: "main", Path: "nav.yaml",
+	})
+	if err != nil {
+		t.Fatalf("NewGitea() error = %v", err)
+	}
+
+	allowed := map[string]bool{
+		"good":       true,
+		"case":       true, // git full names are case insensitive enough for this
+		"":           false,
+		"bad":        false,
+		"other-repo": false,
+		"not-json":   false,
+		"empty":      false,
+		"redirect":   false,
+	}
+	for token, want := range allowed {
+		if got := src.CanRead(context.Background(), token); got != want {
+			t.Errorf("CanRead(%q) = %v, want %v", token, got, want)
+		}
 	}
 }

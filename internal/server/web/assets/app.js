@@ -279,7 +279,9 @@
   }
 
   // The revision does not change when you unlock, so load() would decide there
-  // is nothing to redraw. Clearing it forces a render.
+  // is nothing to redraw. Clearing it forces a render. The result says whether
+  // the view could be fetched at all: "still locked" is only a refusal when the
+  // server actually answered.
   function reloadView() {
     state.renderedRev = null;
     return load({ notify: false });
@@ -308,10 +310,10 @@
 
       setStoredToken(value);
       els.unlockToken.value = '';
-      await reloadView();
+      var fetched = await reloadView();
 
       var view = state.config && state.config.private;
-      if (view && view.locked) {
+      if (view && view.locked && fetched) {
         // The forge refused it. Say so, rather than leaving the page looking
         // exactly as before, which reads as "the button is broken".
         setStoredToken('');
@@ -319,6 +321,15 @@
         els.unlockForm.hidden = false;
         els.unlockToken.focus();
         toast('令牌被拒绝：它不能读取配置仓');
+        return;
+      }
+      if (view && view.locked) {
+        // The request never got an answer (server restarting, network blip).
+        // The token is kept: throwing it away here would make the user re-paste
+        // a perfectly good one while debugging the wrong thing.
+        els.unlockForm.hidden = false;
+        els.unlockToken.focus();
+        toast('暂时无法确认令牌，请重试');
         return;
       }
       els.unlockForm.hidden = true;
@@ -686,6 +697,11 @@
       if (value) sessionStorage.setItem(TOKEN_KEY, value);
       else sessionStorage.removeItem(TOKEN_KEY);
     } catch (e) { /* private mode: the unlock simply will not persist */ }
+    // Whoever is asking has changed, so what was fetched for the previous
+    // identity is not ours to keep. Dropping the probe results matters most on
+    // logout: if the next /api/status request failed, the old ones would keep a
+    // private service's state in the health pill.
+    state.status = { enabled: false, results: {} };
   }
 
   async function fetchJSON(path) {
@@ -735,7 +751,7 @@
       } else {
         showState('导航配置尚未就绪，正在重试…', navError.message, true);
       }
-      return;
+      return false;
     }
 
     var meta = state.config.meta || {};
@@ -765,6 +781,7 @@
       if (options.notify && themeChanged) toast('样式已更新');
     }
     hideState();
+    return true;
   }
 
   /* ---------- live updates ---------- */
