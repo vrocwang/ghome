@@ -1,6 +1,7 @@
 package nav
 
 import (
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -785,5 +786,120 @@ groups:
 	}
 	if containsSubstring(warnings, "links[1]") {
 		t.Errorf("warnings = %v: a link within the cap must not be warned about", warnings)
+	}
+}
+
+// `newTab: "false"` used to be a fatal type error, taking the whole document
+// down over a cosmetic field. Written booleans are folded onto real ones now,
+// for every boolean key, while a value that is not a boolean still fails with
+// the line number.
+func TestWrittenBooleansAreAccepted(t *testing.T) {
+	doc := `
+search:
+  enabled: "false"
+status:
+  enabled: "YES"
+groups:
+  - name: g
+    private: "off"
+    links:
+      - {name: a, url: https://a.example.com, newTab: "false", pinned: "on", probe: "no"}
+`
+	cfg, _, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if cfg.Search.Enabled == nil || *cfg.Search.Enabled {
+		t.Errorf("search.enabled = %v, want false", cfg.Search.Enabled)
+	}
+	if cfg.Status.Enabled == nil || !*cfg.Status.Enabled {
+		t.Errorf("status.enabled = %v, want true", cfg.Status.Enabled)
+	}
+	g := cfg.Groups[0]
+	if g.Private {
+		t.Error("groups[0].private = true, want false")
+	}
+	if g.Links[0].NewTab == nil || *g.Links[0].NewTab {
+		t.Errorf("newTab = %v, want false", g.Links[0].NewTab)
+	}
+	if !g.Links[0].Pinned {
+		t.Error("pinned = false, want true")
+	}
+	if g.Links[0].Probe == nil || *g.Links[0].Probe {
+		t.Errorf("probe = %v, want false", g.Links[0].Probe)
+	}
+
+	// Something that is not a boolean at all still fails, and still says where.
+	if _, _, err := Parse([]byte("groups:\n  - name: g\n    links:\n      - {name: a, url: https://a.example.com, newTab: maybe}\n")); err == nil {
+		t.Fatal("newTab: maybe was accepted")
+	} else if !strings.Contains(err.Error(), "line 4") {
+		t.Errorf("error = %v, want it to carry the line number", err)
+	}
+
+	// A link whose *name* is a boolean word must survive untouched.
+	named, _, err := Parse([]byte("groups:\n  - name: g\n    links:\n      - {name: \"no\", url: https://a.example.com}\n"))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	if got := named.Groups[0].Links[0].Name; got != "no" {
+		t.Errorf("name = %q, want %q", got, "no")
+	}
+}
+
+// Link.ProbeTarget is the one answer the browser gets, so it has to agree with
+// what the prober is actually given.
+func TestProbeTargetMatchesTheProbeList(t *testing.T) {
+	cfg, _, err := Parse([]byte(`
+groups:
+  - name: g
+    links:
+      - {name: http, url: "https://a.example.com"}
+      - {name: 关闭, url: "https://b.example.com", probe: false}
+      - {name: ssh, url: "ssh://git@10.0.0.5:2222"}
+      - {name: 邮件, url: "mailto:team@example.com"}
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+
+	want := []bool{true, false, false, false}
+	links := cfg.Groups[0].Links
+	for i, l := range links {
+		if l.ProbeTarget != want[i] {
+			t.Errorf("%s.ProbeTarget = %v, want %v", l.Name, l.ProbeTarget, want[i])
+		}
+	}
+
+	targets := cfg.ProbeTargets()
+	if len(targets) != 1 || targets[0] != "https://a.example.com" {
+		t.Fatalf("ProbeTargets() = %v, want just the probeable http link", targets)
+	}
+	for _, l := range links {
+		listed := slices.Contains(targets, l.URL)
+		if listed != l.ProbeTarget {
+			t.Errorf("%s: ProbeTargets contains it = %v, ProbeTarget = %v", l.Name, listed, l.ProbeTarget)
+		}
+	}
+}
+
+// Cosmetic text fields are trimmed, like every other cosmetic value.
+func TestDescriptionsAndGroupIconsAreTrimmed(t *testing.T) {
+	cfg, _, err := Parse([]byte(`
+groups:
+  - name: "  g  "
+    icon: "  🔧  "
+    description: "  组说明  "
+    links:
+      - {name: "  a  ", url: https://a.example.com, description: "  リンク説明  "}
+`))
+	if err != nil {
+		t.Fatalf("Parse() error = %v", err)
+	}
+	g := cfg.Groups[0]
+	if g.Name != "g" || g.Icon != "🔧" || g.Description != "组说明" {
+		t.Errorf("group = %q / %q / %q, want trimmed", g.Name, g.Icon, g.Description)
+	}
+	if got := g.Links[0].Description; got != "リンク説明" {
+		t.Errorf("link description = %q, want it trimmed", got)
 	}
 }

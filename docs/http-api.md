@@ -22,6 +22,11 @@
 「主机不在配置里」状态码和耗时都一致。`/healthz` 同理只统计公开条目，见下。
 细节见 [README 的「私密链接」](../README.md#私密链接)。
 
+`/api/nav` 里每个链接还带一个**派生**字段 `probeTarget`：它说明这个链接会不会出现在
+`/api/status` 的结果里（即"服务端真的会探测它"）。前端需要它，因为"某个 URL 没有结果"本身是
+有歧义的——既可能是"还没探到"，也可能是"永远不会探"，后者不该挂一个一直转的状态点。
+`probeTarget` 是 `probe !== false` 且协议是 http(s) 两者同时成立。
+
 
 | 方法 | 路径 | 说明 |
 | --- | --- | --- |
@@ -30,8 +35,7 @@
 | `GET` | `/favicon.ico` | 站点图标，固定以 SVG 提供，可被 `--web-dir` 覆盖 |
 | `GET` | `/assets/*` | 内嵌资源，可被 `--web-dir` 逐文件覆盖 |
 | `GET` | `/api/nav` | 当前配置 + 版本元信息；尚未加载到配置时返回 503 |
-| `GET` | `/api/status` | 探测结果；未开启探测时返回 `{"enabled":false}` 而不是错误 |
-| `GET` | `/api/icon?h=<host>` | 图标代理。仅限配置里出现过的 host，响应带沙箱 CSP |
+| `GET` | `/api/status` | 探测结果；未开启探测时返回 `{"enabled":false}` 而不是错误 || `GET` | `/api/icon?h=<host>` | 图标代理。仅限配置里出现过的 host，响应带沙箱 CSP |
 | `GET` | `/api/events` | SSE 流。连上先发 `hello`（带当前 revision），之后每次变更发 `changed`。并发上限 256，超出返回 503（一个标签页一条，正常远够；`/healthz` 的 `subscribers` 是当前数） |
 | `POST` | `/api/webhook` | Gitea 推送回调，HMAC 校验 |
 | `POST` | `/api/refresh` | 手动触发重载，需要 `Authorization: Bearer <admin-token>` |

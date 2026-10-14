@@ -126,6 +126,11 @@ groups:
 | `links[].hotkey` | 空 | 单字符，页面任意位置按下即跳转 |
 | `links[].newTab` / `pinned` / `probe` / `private` | `true` / `false` / `true` / `false` | 新标签页打开 / 提升到置顶区 / 参与状态探测 / 只有解锁后可见 |
 
+布尔值可以按 YAML 的写法给（`true`/`false`），也可以写成 `"false"`、`yes`、`no`、`on`、
+`off`、`1`、`0`——写成字符串不会再让整份配置被拒。文本字段两侧的空白会被去掉。
+`probe: false` 与"非 http(s) 链接本来就不探测"是一件事的两种来源：两者都会让该链接既不进
+探测列表、也不显示状态点。
+
 **页面上能用的键**：`/`（或你配的 `hotkey`）聚焦搜索框 · `↑` `↓` 选择 · `Enter` 打开 ·
 `Esc` 清空 · `T` 切主题 · 每个链接自己的 `hotkey`（优先于全局键）· `Cmd/Ctrl+K` 搜索 ·
 `Cmd/Ctrl+Enter` 用搜索引擎搜当前词。

@@ -153,6 +153,11 @@ type Link struct {
 	// Probe is false to exclude this link from status probing. Nil means the
 	// default, which is to probe.
 	Probe *bool `yaml:"probe" json:"probe,omitempty"`
+	// ProbeTarget is derived, not configured: it says whether the prober will
+	// ever have a result for this link. The browser needs it because a missing
+	// result otherwise means two different things -- "not probed yet" (show
+	// "checking") and "cannot be probed" (show no light at all).
+	ProbeTarget bool `yaml:"-" json:"probeTarget"`
 	// Private hides this link from a caller that has not proved it may see it.
 	Private bool `yaml:"private" json:"private,omitempty"`
 }
@@ -264,11 +269,7 @@ func (c *Config) ProbeTargets() []string {
 	var out []string
 	for _, g := range c.Groups {
 		for _, l := range g.Links {
-			if l.Probe != nil && !*l.Probe {
-				continue
-			}
-			lower := strings.ToLower(l.URL)
-			if !strings.HasPrefix(lower, "http://") && !strings.HasPrefix(lower, "https://") {
+			if !probeable(l) {
 				continue
 			}
 			if seen[l.URL] {
@@ -279,6 +280,19 @@ func (c *Config) ProbeTargets() []string {
 		}
 	}
 	return out
+}
+
+// probeable reports whether this link is watched by the prober. It is the one
+// place that decides, and Link.ProbeTarget publishes the answer to the browser:
+// "no result for this URL" is otherwise ambiguous -- it means both "not probed
+// yet" and "never will be" -- which is how a mailto: link ended up with a
+// status light that spun forever.
+func probeable(l Link) bool {
+	if l.Probe != nil && !*l.Probe {
+		return false
+	}
+	lower := strings.ToLower(l.URL)
+	return strings.HasPrefix(lower, "http://") || strings.HasPrefix(lower, "https://")
 }
 
 // PageURLs returns every configured link URL, which is the set the icon
@@ -447,16 +461,26 @@ func (p Payload) VisibleURLs() map[string]struct{} {
 // It returns the config, any non-fatal warnings, and an error. Warnings never
 // prevent the config from being used.
 func Parse(data []byte) (*Config, []string, error) {
-	warnings, err := collectUnknownFields(data)
+	node, err := decodeNode(data)
+	if err != nil {
+		return nil, nil, err
+	}
+	// Written spellings of booleans are folded onto real booleans before either
+	// pass runs. yaml.v3 rejects `newTab: "false"` as a type error, which would
+	// take the whole document down over a cosmetic field -- exactly the outcome
+	// the two-tier validation exists to avoid, and a trap for the value that is
+	// quoted out of habit. Applied to the tree, both passes see one document.
+	coerceBools(node)
+
+	warnings, err := collectUnknownFields(node)
 	if err != nil {
 		return nil, nil, err
 	}
 
 	// Decode leniently: the strict pass above may have stopped filling the
 	// struct at the first unknown key.
-	dec := yaml.NewDecoder(bytes.NewReader(data))
 	var c Config
-	if err := dec.Decode(&c); err != nil {
+	if err := node.Decode(&c); err != nil {
 		return nil, warnings, fmt.Errorf("invalid yaml: %w", err)
 	}
 
@@ -468,15 +492,82 @@ func Parse(data []byte) (*Config, []string, error) {
 	return &c, warnings, nil
 }
 
+// decodeNode reads a document into a yaml.Node tree. A YAML syntax error is
+// fatal: there is nothing to validate or report field by field.
+func decodeNode(data []byte) (*yaml.Node, error) {
+	var doc yaml.Node
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil, fmt.Errorf("invalid yaml: %w", err)
+	}
+	if doc.Kind == 0 {
+		// An empty document parses to a zero node; hand the later passes
+		// something they can walk.
+		return &yaml.Node{Kind: yaml.DocumentNode}, nil
+	}
+	return &doc, nil
+}
+
+// boolFields are the mapping keys whose value is a boolean, anywhere in the
+// document. Only these are coerced: coercing every scalar would turn a link
+// named "no" into a boolean.
+var boolFields = map[string]bool{
+	"enabled": true,
+	"private": true,
+	"newTab":  true,
+	"pinned":  true,
+	"probe":   true,
+}
+
+// coerceBools rewrites a written boolean ("false", "no", "off", "0", ...) into
+// a real boolean node. A value that is none of those is left untouched, so the
+// decoder still reports it -- with the line number -- instead of this function
+// inventing an error of its own.
+func coerceBools(n *yaml.Node) {
+	if n == nil {
+		return
+	}
+	switch n.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, child := range n.Content {
+			coerceBools(child)
+		}
+	case yaml.MappingNode:
+		for i := 0; i+1 < len(n.Content); i += 2 {
+			key, value := n.Content[i], n.Content[i+1]
+			if boolFields[key.Value] && value.Kind == yaml.ScalarNode {
+				if b, ok := parseBoolWord(value.Value); ok {
+					// The Style has to be cleared and Value made canonical,
+					// not just the tag: the encoder quotes a scalar according
+					// to Style, so a node the author wrote as "false" was
+					// written back out with the quotes and the strict pass read
+					// it as a string again. Line and Column stay, so messages
+					// still point at the line the author wrote.
+					value.Kind, value.Tag = yaml.ScalarNode, "!!bool"
+					value.Style, value.Value = 0, b
+				}
+			}
+			coerceBools(value)
+		}
+	}
+}
+
+// parseBoolWord recognises the spellings people actually type for a boolean.
+func parseBoolWord(v string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "true", "yes", "on", "1":
+		return "true", true
+	case "false", "no", "off", "0":
+		return "false", true
+	}
+	return "", false
+}
+
 // collectUnknownFields runs a strict decode purely to catch typo'd keys, which
 // are reported as warnings rather than failures. Type mismatches and malformed
 // documents stay fatal.
-func collectUnknownFields(data []byte) ([]string, error) {
-	dec := yaml.NewDecoder(bytes.NewReader(data))
-	dec.KnownFields(true)
-
+func collectUnknownFields(doc *yaml.Node) ([]string, error) {
 	var probe Config
-	err := dec.Decode(&probe)
+	err := strictDecode(doc, &probe)
 	if err == nil {
 		return nil, nil
 	}
@@ -502,6 +593,22 @@ func collectUnknownFields(data []byte) ([]string, error) {
 
 func isUnknownField(msg string) bool {
 	return strings.Contains(msg, "not found in type")
+}
+
+// strictDecode decodes a tree with unknown keys treated as errors. It takes the
+// tree rather than the bytes so that the coercion in Parse applies to both
+// passes; yaml.NewDecoder only accepts bytes.
+func strictDecode(doc *yaml.Node, into any) error {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	if err := enc.Encode(doc); err != nil {
+		return err
+	}
+	_ = enc.Close()
+
+	dec := yaml.NewDecoder(&buf)
+	dec.KnownFields(true)
+	return dec.Decode(into)
 }
 
 // problems accumulates every validation error so one push reports all of them
@@ -592,6 +699,8 @@ func (c *Config) normalize() ([]string, error) {
 	groups := make([]Group, 0, len(c.Groups))
 	for gi, g := range c.Groups {
 		g.Name = strings.TrimSpace(g.Name)
+		g.Icon = strings.TrimSpace(g.Icon)
+		g.Description = strings.TrimSpace(g.Description)
 		if g.Name == "" {
 			p.addf("groups[%d]: name is required", gi)
 		}
@@ -605,6 +714,7 @@ func (c *Config) normalize() ([]string, error) {
 			l.Name = strings.TrimSpace(l.Name)
 			l.URL = strings.TrimSpace(l.URL)
 			l.Hotkey = strings.TrimSpace(l.Hotkey)
+			l.Description = strings.TrimSpace(l.Description)
 			if l.Name == "" {
 				p.addf("groups[%d].links[%d]: name is required", gi, li)
 			}
@@ -631,6 +741,8 @@ func (c *Config) normalize() ([]string, error) {
 					gi, li, l.Name, maxTags, n)
 			}
 			l.Tags = cleanList(l.Tags, maxTags)
+			// One decision, published to the browser: see Link.ProbeTarget.
+			l.ProbeTarget = probeable(l)
 			links = append(links, l)
 		}
 		g.Links = links

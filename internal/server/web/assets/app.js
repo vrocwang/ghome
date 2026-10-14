@@ -536,11 +536,13 @@
     }
   }
 
-  // Only a link the server will actually probe gets a dot. Otherwise a mailto:
-  // or an ssh: entry would sit there claiming to be "checking" forever.
+  // Only a link the server will actually probe gets a dot. The server answers
+  // this in link.probeTarget because "there is no result for this URL" is
+  // ambiguous on its own: it means both "not probed yet" (show "checking") and
+  // "cannot be probed" (show nothing). Deciding it here as well is how a mailto:
+  // entry ended up with a light that spun forever.
   function probeable(link) {
-    if (link.probe === false) return false;
-    return /^https?:\/\//i.test(link.url);
+    return link.probeTarget === true;
   }
 
   function statusDot(link) {
@@ -567,8 +569,12 @@
 
   function matches(link, tokens) {
     if (state.onlyProblems) {
-      var s = statusState(link.url);
-      if (s === 'up') return false;
+      // A link nobody probes has no state to be wrong: without this an ssh: or
+      // mailto: entry -- which can never be "up" -- lands in the problems view.
+      if (probeable(link)) {
+        var s = statusState(link.url);
+        if (s === 'up') return false;
+      }
     }
     if (!tokens.length) return true;
     var haystack = [
