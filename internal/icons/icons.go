@@ -23,27 +23,30 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
-
-	"golang.org/x/net/html"
 )
 
 // Defaults for the zero Options. They are sized for a small VPS: the whole
 // cache is bounded to a few megabytes and no single fetch can hold a request
 // open for long.
 const (
-	defaultTTL        = 24 * time.Hour
-	defaultFailureTTL = 5 * time.Minute
+	defaultTTL = 24 * time.Hour
+	// defaultFailureTTL is zero, which means a failure is remembered for the
+	// life of the process: an icon that could not be fetched is not retried.
+	// "This site has no /favicon.ico" is a fact about the site, and re-asking on
+	// every page load is exactly the traffic a navigation page should not make.
+	// A restart is how a fixed icon is picked up, which is also the moment the
+	// config itself is re-read. FailureTTL is still settable for a caller that
+	// wants retries; the CLI just does not offer one.
+	defaultFailureTTL = time.Duration(0)
 	defaultMaxEntries = 512
 	// MaxEntries alone bounds nothing useful: 512 entries x 512KiB is 256MiB,
 	// which is not what "a few megabytes of icon cache" should mean on a box
 	// that otherwise idles at twelve. The byte budget is what actually bounds it.
 	defaultMaxTotalBytes = 8 << 20
 	defaultMaxBytes      = 512 << 10
-	defaultMaxHTMLBytes  = 256 << 10
 	defaultTimeout       = 8 * time.Second
 	defaultUserAgent     = "ghome-icons/1.0 (+https://github.com/vrocwang/ghome)"
 )
@@ -65,9 +68,21 @@ type Options struct {
 	// Dir is an optional directory of local icon files. A file named
 	// <host>.svg/.png/.ico/.webp/.jpg/.jpeg wins over fetching the site.
 	Dir string
+	// NoFetch refuses to fetch icons from the network, serving Dir and nothing
+	// else: a host with no local file resolves to no icon, and the browser falls
+	// back to a letter avatar.
+	//
+	// It is named for the exception rather than the rule on purpose. Fetching is
+	// what this package is for, so the zero value has to mean "fetch" -- a field
+	// called Auto would make every careless construction of Options silently
+	// stop fetching, which is a hard symptom to trace back to a missing field.
+	NoFetch bool
 	// TTL is how long a successfully resolved icon stays fresh. Default 24h.
 	TTL time.Duration
-	// FailureTTL is how long a negative result is remembered. Default 5m.
+	// FailureTTL is how long a negative result is remembered. Zero -- the
+	// default -- means never: a host whose icon could not be fetched is not
+	// asked again for the life of the process. Set it to retry instead, with the
+	// retry rate that implies for every icon-less host in the config.
 	FailureTTL time.Duration
 	// MaxEntries bounds the cache. Default 512.
 	MaxEntries int
@@ -76,9 +91,6 @@ type Options struct {
 
 	// MaxTotalBytes bounds the whole cache. Default 8MB.
 	MaxTotalBytes int64
-	// MaxHTMLBytes bounds how much of a page we read while looking for the
-	// icon link. Default 256KB.
-	MaxHTMLBytes int64
 	// Timeout bounds a single upstream request. Default 8s.
 	Timeout time.Duration
 	// UserAgent is sent upstream. Give it a sane default.
@@ -128,9 +140,9 @@ func New(opts Options) *Resolver {
 	if opts.TTL <= 0 {
 		opts.TTL = defaultTTL
 	}
-	if opts.FailureTTL <= 0 {
-		opts.FailureTTL = defaultFailureTTL
-	}
+	// FailureTTL is deliberately not defaulted here: its "unset" value and its
+	// "never retry" value are the same zero, so normalising it would only hide
+	// which one the caller meant.
 	if opts.MaxEntries <= 0 {
 		opts.MaxEntries = defaultMaxEntries
 	}
@@ -139,9 +151,6 @@ func New(opts Options) *Resolver {
 	}
 	if opts.MaxTotalBytes <= 0 {
 		opts.MaxTotalBytes = defaultMaxTotalBytes
-	}
-	if opts.MaxHTMLBytes <= 0 {
-		opts.MaxHTMLBytes = defaultMaxHTMLBytes
 	}
 	if opts.Timeout <= 0 {
 		opts.Timeout = defaultTimeout
@@ -215,6 +224,13 @@ func (r *Resolver) Lookup(ctx context.Context, pageURL string) (Icon, bool) {
 		return icon, true
 	}
 
+	// With fetching off there is nothing left that could answer: the caller gets
+	// the same "no icon" it would get for a site whose favicon cannot be
+	// resolved, and the browser falls back to a letter avatar.
+	if r.opts.NoFetch {
+		return Icon{}, false
+	}
+
 	key := u.String()
 	if icon, ok, fresh := r.get(key); fresh {
 		r.countHit()
@@ -232,6 +248,9 @@ func (r *Resolver) Lookup(ctx context.Context, pageURL string) (Icon, bool) {
 		}
 		icon, ok, cacheable := r.resolve(ctx, u)
 		if cacheable {
+			// A failure goes in with FailureTTL, which is zero by default: the
+			// miss is remembered for the life of the process, so a host without
+			// an icon is fetched exactly once rather than on every page load.
 			ttl := r.opts.TTL
 			if !ok {
 				ttl = r.opts.FailureTTL
@@ -248,6 +267,11 @@ func (r *Resolver) Lookup(ctx context.Context, pageURL string) (Icon, bool) {
 func (r *Resolver) Warm(ctx context.Context, pageURLs []string) {
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	// Nothing here could be served: Lookup refuses to fetch in this mode too, so
+	// a warm pass would only fetch pages and icons nobody can ever be shown.
+	if r.opts.NoFetch {
+		return
 	}
 	pending := r.pending(pageURLs)
 	if len(pending) == 0 {
@@ -302,8 +326,8 @@ func (r *Resolver) warm(ctx context.Context, urls []string) {
 	wg.Wait()
 }
 
-// pending filters pageURLs down to work worth doing: allowed, http(s), not
-// already cached fresh, and deduplicated.
+// pending returns the URLs actually worth fetching: allowed, http(s), not
+// already cached fresh, deduplicated, and not already answered by a local file.
 func (r *Resolver) pending(pageURLs []string) []string {
 	seen := make(map[string]struct{}, len(pageURLs))
 	out := make([]string, 0, len(pageURLs))
@@ -321,6 +345,13 @@ func (r *Resolver) pending(pageURLs []string) []string {
 		if _, _, fresh := r.get(key); fresh {
 			continue
 		}
+		// A local file already answers for this host and is checked before both
+		// the cache and the network. Warming it anyway would fetch a page and an
+		// icon that can never be served -- which would leave --icon-dir costing
+		// exactly the traffic it was set up to avoid.
+		if r.hasLocal(u.Hostname()) {
+			continue
+		}
 		out = append(out, key)
 	}
 	return out
@@ -330,16 +361,11 @@ func (r *Resolver) pending(pageURLs []string) []string {
 // outcome says nothing about the site: a cancelled caller must not poison the
 // cache that everybody else reads.
 func (r *Resolver) resolve(ctx context.Context, page *url.URL) (Icon, bool, bool) {
-	iconURL, err := r.iconURL(ctx, page)
-	if err != nil {
-		r.log.Debug("icons: no icon", "host", page.Hostname(), "err", err)
-		return Icon{}, false, ctx.Err() == nil
-	}
-
-	icon, err := r.download(ctx, iconURL)
+	target := iconURL(page)
+	icon, err := r.download(ctx, target)
 	if err != nil {
 		r.log.Debug("icons: download failed",
-			"host", page.Hostname(), "icon", safeURL(iconURL), "err", err)
+			"host", page.Hostname(), "icon", safeURL(target), "err", err)
 		return Icon{}, false, ctx.Err() == nil
 	}
 
@@ -348,56 +374,18 @@ func (r *Resolver) resolve(ctx context.Context, page *url.URL) (Icon, bool, bool
 	return icon, true, true
 }
 
-// iconURL picks the URL to fetch for a page. When the markup names nothing
-// usable we guess the conventional /favicon.ico, which is right often enough to
-// be worth the one request.
-func (r *Resolver) iconURL(ctx context.Context, page *url.URL) (*url.URL, error) {
-	href, err := r.scrapeIcon(ctx, page)
-	switch {
-	case err == nil && href != nil:
-		return href, nil
-	case err != nil && ctx.Err() != nil:
-		// The caller is gone; do not spend another request on a fallback.
-		return nil, err
-	}
-	// Either the page had no usable link, or it could not be read at all. Both
-	// are worth one guess: plenty of sites answer 403 to a crawler and still
-	// serve /favicon.ico.
-	if err != nil {
-		r.log.Debug("icons: page fetch failed", "host", page.Hostname(), "err", err)
-	}
-	return &url.URL{Scheme: page.Scheme, Host: page.Host, Path: "/favicon.ico"}, nil
-}
-
-// scrapeIcon fetches the page head and returns the icon link it declares.
-// It returns (nil, nil) when the page loaded but names no usable icon.
-func (r *Resolver) scrapeIcon(ctx context.Context, page *url.URL) (*url.URL, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, page.String(), nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("User-Agent", r.opts.UserAgent)
-	req.Header.Set("Accept", "text/html,application/xhtml+xml")
-
-	resp, err := r.client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return nil, fmt.Errorf("page returned %s", resp.Status)
-	}
-	// LimitReader keeps a hostile or huge page from being read into memory;
-	// the tokenizer copes with the truncation.
-	return parseIconLink(io.LimitReader(resp.Body, r.opts.MaxHTMLBytes), page), nil
+// iconURL is the conventional icon path on the site's own origin. Host is
+// carried over verbatim so a non-default port survives and the allow list --
+// which is keyed by hostname -- is checked against exactly what will be dialled.
+func iconURL(page *url.URL) *url.URL {
+	return &url.URL{Scheme: page.Scheme, Host: page.Host, Path: "/favicon.ico"}
 }
 
 // download fetches one icon and refuses anything that is not an image.
 func (r *Resolver) download(ctx context.Context, iconURL *url.URL) (Icon, error) {
-	// A page is free to declare its icon anywhere, so this is checked here
-	// rather than only where the link was parsed. Without it, one allowed host
-	// is enough to make the resolver fetch any address at all.
+	// The redirect target is chosen by the far end, so the check cannot live
+	// only where the URL was built: without this, one allowed host would be
+	// enough to make the resolver fetch any address at all.
 	if host := iconURL.Hostname(); !r.isAllowed(host) {
 		return Icon{}, fmt.Errorf("icons: %s is not in the config", host)
 	}
@@ -412,11 +400,6 @@ func (r *Resolver) download(ctx context.Context, iconURL *url.URL) (Icon, error)
 	resp, err := r.client.Do(req)
 	if err != nil {
 		return Icon{}, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		return Icon{}, fmt.Errorf("icon returned %s", resp.Status)
 	}
 
 	// One byte past the cap so an oversized body is rejected instead of being
@@ -454,6 +437,21 @@ func (r *Resolver) local(host string) (Icon, bool) {
 	return Icon{}, false
 }
 
+// hasLocal reports whether Dir holds an icon for host, without reading the
+// bytes. Warm uses it to skip a host that local() would answer before the
+// network is ever consulted.
+func (r *Resolver) hasLocal(host string) bool {
+	if r.opts.Dir == "" || !safeHostName(host) {
+		return false
+	}
+	for _, ext := range localExts {
+		if info, err := os.Stat(filepath.Join(r.opts.Dir, host+ext)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
 // readLocal reads one local icon, held to the same size cap as a fetched one so
 // a stray huge file in Dir cannot be loaded into memory on every page load.
 func (r *Resolver) readLocal(path string) ([]byte, error) {
@@ -474,108 +472,6 @@ func (r *Resolver) readLocal(path string) ([]byte, error) {
 		return nil, fmt.Errorf("icons: %s is empty", path)
 	}
 	return data, nil
-}
-
-// parseIconLink scans an HTML document for the most useful icon link and
-// returns it resolved against any <base href>. It is deliberately lenient: a
-// truncated or malformed document yields whatever could be read, never a panic.
-func parseIconLink(rd io.Reader, page *url.URL) *url.URL {
-	z := html.NewTokenizer(rd)
-	var (
-		base     *url.URL
-		best     *url.URL
-		bestSize = -1
-	)
-
-	for {
-		switch z.Next() {
-		case html.ErrorToken:
-			return best
-		case html.StartTagToken, html.SelfClosingTagToken:
-		default:
-			continue
-		}
-
-		name, hasAttr := z.TagName()
-		var (
-			rel, href, sizes  string
-			haveRel, haveHref bool
-		)
-		// Attributes must always be drained, or the tokenizer loses its place.
-		for hasAttr {
-			var k, v []byte
-			k, v, hasAttr = z.TagAttr()
-			switch string(k) {
-			case "rel":
-				rel, haveRel = string(v), true
-			case "href":
-				href, haveHref = string(v), true
-			case "sizes":
-				sizes = string(v)
-			}
-		}
-
-		switch string(name) {
-		case "base":
-			if base == nil && haveHref {
-				base = resolveHref(page, href)
-			}
-		case "link":
-			if !haveRel || !haveHref || !iconRel(rel) {
-				continue
-			}
-			ref := base
-			if ref == nil {
-				ref = page
-			}
-			u := resolveHref(ref, href)
-			if !isHTTP(u) {
-				// javascript:, data: and friends are not icons.
-				continue
-			}
-			// Strictly greater keeps the first of equally sized candidates,
-			// which is what the spec asks for.
-			if size := iconSize(sizes); size > bestSize {
-				best, bestSize = u, size
-			}
-		}
-	}
-}
-
-// iconRel reports whether a rel attribute marks a link as a site icon. rel is a
-// space separated token list, so "shortcut icon" matches while "iconify" and a
-// bare "shortcut" do not.
-func iconRel(rel string) bool {
-	for _, tok := range strings.Fields(strings.ToLower(rel)) {
-		switch tok {
-		case "icon", "apple-touch-icon", "apple-touch-icon-precomposed", "mask-icon":
-			return true
-		}
-	}
-	return false
-}
-
-// iconSize scores a sizes attribute by the largest area it declares. Anything
-// that is not a WxH pair, "any" included, scores nothing: only comparable
-// numbers may outrank a candidate, and an unranked icon still wins by being
-// first.
-func iconSize(sizes string) int {
-	best := 0
-	for _, field := range strings.Fields(strings.ToLower(sizes)) {
-		w, h, ok := strings.Cut(field, "x")
-		if !ok {
-			continue
-		}
-		nw, errw := strconv.Atoi(w)
-		nh, errh := strconv.Atoi(h)
-		if errw != nil || errh != nil || nw <= 0 || nh <= 0 {
-			continue
-		}
-		if area := nw * nh; area > best {
-			best = area
-		}
-	}
-	return best
 }
 
 // detectContentType trusts the server's Content-Type when it means something
@@ -620,20 +516,6 @@ func localContentType(ext string, data []byte) string {
 		return "image/jpeg"
 	}
 	return "application/octet-stream"
-}
-
-// resolveHref resolves a possibly relative reference, never returning an error:
-// an unparseable href simply has no icon behind it.
-func resolveHref(base *url.URL, ref string) *url.URL {
-	ref = strings.TrimSpace(ref)
-	if ref == "" || base == nil {
-		return nil
-	}
-	u, err := url.Parse(ref)
-	if err != nil {
-		return nil
-	}
-	return base.ResolveReference(u)
 }
 
 // hostOf extracts the normalised host of an allow list entry. Ports are
@@ -685,6 +567,12 @@ type entry struct {
 	expires time.Time
 }
 
+// neverExpires is the head of the expiry range, used for entries that are kept
+// until the process ends. It is a real time rather than a bool so that get's
+// single comparison stays enough, and it is comfortably inside the representable
+// range of time.Time -- unlike time.Now().Add(math.MaxInt64), which overflows.
+var neverExpires = time.Date(9999, 1, 1, 0, 0, 0, 0, time.UTC)
+
 // size is what this entry contributes to the resolver's byte budget. A cached
 // miss carries no body, so it costs an entry slot but no bytes.
 func (e *entry) size() int64 { return int64(len(e.icon.Data)) }
@@ -708,12 +596,17 @@ func (r *Resolver) get(key string) (icon Icon, ok, fresh bool) {
 	return e.icon, e.ok, true
 }
 
-// put stores an answer and evicts the coldest entries past MaxEntries.
+// put stores an answer and evicts the coldest entries past MaxEntries. A zero
+// ttl means the answer never expires: that is how a failure is remembered for
+// the life of the process, so a host with no icon is fetched exactly once.
 func (r *Resolver) put(key string, icon Icon, ok bool, ttl time.Duration) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	expires := time.Now().Add(ttl)
+	expires := neverExpires
+	if ttl > 0 {
+		expires = time.Now().Add(ttl)
+	}
 	if el, found := r.byKey[key]; found {
 		e := el.Value.(*entry)
 		r.bytes += int64(len(icon.Data)) - e.size()

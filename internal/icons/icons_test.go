@@ -8,7 +8,6 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -31,6 +30,8 @@ func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
+// testResolver builds a resolver with a quiet logger, which is what almost
+// every test here wants.
 func testResolver(t *testing.T, opts Options) *Resolver {
 	t.Helper()
 	if opts.Logger == nil {
@@ -110,134 +111,34 @@ func image(data []byte, contentType string) http.HandlerFunc {
 	}
 }
 
-func TestLookupResolvesIconLink(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<html><head><link rel="icon" href="/a.png"></head><body>ok</body></html>`),
-		"/a.png": image(pngBytes, "image/png"),
+// iconSite is the one host every resolution test needs: a site serving those
+// bytes at the conventional path.
+func iconSite(t *testing.T) *site {
+	t.Helper()
+	return newSite(t, map[string]http.HandlerFunc{
+		"/favicon.ico": image(pngBytes, "image/png"),
 	})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-
-	icon, ok := r.Lookup(context.Background(), s.URL)
-	if !ok {
-		t.Fatalf("Lookup() = false, want the linked icon (paths: %v)", s.seen())
-	}
-	if !bytes.Equal(icon.Data, pngBytes) {
-		t.Errorf("Lookup() data = %q, want the PNG body", icon.Data)
-	}
-	if icon.ContentType != "image/png" {
-		t.Errorf("Lookup() content type = %q, want image/png", icon.ContentType)
-	}
-
-	// A second lookup must come from the cache.
-	before := s.total()
-	if _, ok := r.Lookup(context.Background(), s.URL); !ok {
-		t.Fatal("second Lookup() = false")
-	}
-	if s.total() != before {
-		t.Errorf("second Lookup() hit the network again: %v", s.seen())
-	}
-	if _, hits, _ := r.Stats(); hits == 0 {
-		t.Error("Stats() reported no cache hits")
-	}
 }
 
-func TestLookupResolvesRelativeHrefAgainstBase(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":             page(`<html><head><base href="/static/"><link rel="icon" href="b.png"></head></html>`),
-		"/static/b.png": image(gifBytes, "image/gif"),
+// slowIconSite is the same, holding each response open long enough for
+// concurrent callers to pile up on one flight, and counting the requests.
+func slowIconSite(t *testing.T, fetches *int32, delay time.Duration) *site {
+	t.Helper()
+	return newSite(t, map[string]http.HandlerFunc{
+		"/favicon.ico": func(w http.ResponseWriter, r *http.Request) {
+			if fetches != nil {
+				atomic.AddInt32(fetches, 1)
+			}
+			time.Sleep(delay)
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(pngBytes)
+		},
 	})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-
-	icon, ok := r.Lookup(context.Background(), s.URL)
-	if !ok {
-		t.Fatalf("Lookup() = false, want the icon under <base> (paths: %v)", s.seen())
-	}
-	if !bytes.Equal(icon.Data, gifBytes) {
-		t.Errorf("Lookup() data = %q, want the GIF under /static/", icon.Data)
-	}
-	if got := s.hits("/static/b.png"); got != 1 {
-		t.Errorf("requests for /static/b.png = %d, want 1 (paths: %v)", got, s.seen())
-	}
-}
-
-func TestLookupPrefersLargestSizes(t *testing.T) {
-	small := append([]byte("\x89PNG\r\n\x1a\n"), []byte("small")...)
-	big := append([]byte("\x89PNG\r\n\x1a\n"), []byte("big")...)
-
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/": page(`<html><head>
-			<link rel="icon" sizes="32x32" href="/small.png">
-			<link rel="apple-touch-icon" sizes="192x192" href="/big.png">
-			<link rel="icon" sizes="16x16" href="/small.png">
-		</head></html>`),
-		"/small.png": image(small, "image/png"),
-		"/big.png":   image(big, "image/png"),
-	})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-
-	icon, ok := r.Lookup(context.Background(), s.URL)
-	if !ok {
-		t.Fatalf("Lookup() = false (paths: %v)", s.seen())
-	}
-	if !bytes.Equal(icon.Data, big) {
-		t.Errorf("Lookup() picked %q, want the 192x192 icon", icon.Data)
-	}
-	if got := s.hits("/small.png"); got != 0 {
-		t.Errorf("requests for the smaller icon = %d, want 0", got)
-	}
-}
-
-func TestLookupFallsBackToFaviconIco(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":            page(`<html><head><title>no icons here</title></head><body>x</body></html>`),
-		"/favicon.ico": image(icoBytes, "image/x-icon"),
-	})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-
-	icon, ok := r.Lookup(context.Background(), s.URL)
-	if !ok {
-		t.Fatalf("Lookup() = false, want the /favicon.ico fallback (paths: %v)", s.seen())
-	}
-	if !bytes.Equal(icon.Data, icoBytes) {
-		t.Errorf("Lookup() data = %q, want the ICO body", icon.Data)
-	}
-	if got := s.hits("/favicon.ico"); got != 1 {
-		t.Errorf("requests for /favicon.ico = %d, want 1", got)
-	}
-}
-
-func TestLookupRejectsNonImage(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": page(`<html><body>this is an error page</body></html>`),
-	})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-
-	icon, ok := r.Lookup(context.Background(), s.URL)
-	if ok {
-		t.Fatalf("Lookup() = true for a text/html icon, want false")
-	}
-	if icon.Data != nil || icon.ContentType != "" {
-		t.Errorf("Lookup() = %+v, want the zero Icon", icon)
-	}
-	// A link was found, so the conventional path is not tried as well.
-	if got := s.hits("/favicon.ico"); got != 0 {
-		t.Errorf("requests for /favicon.ico = %d, want 0 after a matched link failed", got)
-	}
 }
 
 func TestLookupRefusesUnallowedHost(t *testing.T) {
 	s := newSite(t, map[string]http.HandlerFunc{
-		"/":       page(`<link rel="icon" href="/a.png">`),
-		"/a.png":  image(pngBytes, "image/png"),
-		"/f.ico":  image(icoBytes, "image/x-icon"),
-		"/safe":   page(`<link rel="icon" href="/a.png">`),
-		"/unused": page(`<link rel="icon" href="/a.png">`),
+		"/favicon.ico": image(icoBytes, "image/x-icon"),
 	})
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
@@ -291,10 +192,7 @@ func TestAllowNormalisesHosts(t *testing.T) {
 }
 
 func TestLookupIgnoresPortInAllowList(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-	})
+	s := iconSite(t)
 	r := testResolver(t, Options{})
 	// Registered with an unrelated port: http://x:3000 and http://x are the
 	// same site.
@@ -305,11 +203,74 @@ func TestLookupIgnoresPortInAllowList(t *testing.T) {
 	}
 }
 
-func TestLookupUsesLocalDirWithoutNetwork(t *testing.T) {
+/* ---------- 抓取策略：只猜 /favicon.ico ---------- */
+
+// One request per site, and never a document -- even though this page declares
+// an icon that a naive reader would have gone and fetched.
+func TestLookupFetchesOnlyTheConventionalPath(t *testing.T) {
 	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
+		"/":            page(`<html><head><link rel="icon" href="/a.png" sizes="64x64"></head></html>`),
+		"/favicon.ico": image(icoBytes, "image/x-icon"),
+		"/a.png":       image(pngBytes, "image/png"),
 	})
+	r := testResolver(t, Options{})
+	r.Allow([]string{s.URL})
+
+	icon, ok := r.Lookup(context.Background(), s.URL)
+	if !ok {
+		t.Fatalf("Lookup() = false, want /favicon.ico (paths: %v)", s.seen())
+	}
+	if !bytes.Equal(icon.Data, icoBytes) {
+		t.Error("Lookup() did not return the bytes from /favicon.ico")
+	}
+	if got := s.seen(); len(got) != 1 || got[0] != "/favicon.ico" {
+		t.Errorf("requests = %v, want exactly [/favicon.ico]", got)
+	}
+}
+
+// Warm has to obey the same rule, or the prefetch quietly pays a page request
+// that the on-demand path just avoided.
+func TestWarmFetchesOnlyTheConventionalPath(t *testing.T) {
+	const n = 4
+	s := newSite(t, map[string]http.HandlerFunc{
+		"/":            page(`<html><head><link rel="icon" href="/a.png"></head></html>`),
+		"/favicon.ico": image(icoBytes, "image/x-icon"),
+		"/a.png":       image(pngBytes, "image/png"),
+	})
+	r := testResolver(t, Options{})
+	r.Allow([]string{s.URL})
+
+	urls := make([]string, 0, n)
+	for i := 0; i < n; i++ {
+		urls = append(urls, fmt.Sprintf("%s/?i=%d", s.URL, i))
+	}
+	r.Warm(context.Background(), urls)
+
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		hits := 0
+		for _, p := range s.seen() {
+			if p == "/favicon.ico" {
+				hits++
+			}
+		}
+		if hits == n {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("/favicon.ico fetched %d times, want %d (paths: %v)", hits, n, s.seen())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	for _, p := range s.seen() {
+		if p != "/favicon.ico" {
+			t.Errorf("warm requested %q, want only /favicon.ico (paths: %v)", p, s.seen())
+		}
+	}
+}
+
+func TestLookupUsesLocalDirWithoutNetwork(t *testing.T) {
+	s := iconSite(t)
 
 	dir := t.TempDir()
 	local := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>`)
@@ -338,6 +299,105 @@ func TestLookupUsesLocalDirWithoutNetwork(t *testing.T) {
 	}
 }
 
+// autoOff builds a resolver with fetching disabled. Tests use it to prove that
+// nothing reaches the network in that mode.
+func autoOff(t *testing.T, opts Options) *Resolver {
+	t.Helper()
+	opts.NoFetch = true
+	return testResolver(t, opts)
+}
+
+func TestAutoOffNeverFetches(t *testing.T) {
+	s := iconSite(t)
+	r := autoOff(t, Options{})
+	r.Allow([]string{s.URL})
+
+	// Twice, to catch a "cache the miss" path that would hide a repeated fetch.
+	for i := 0; i < 2; i++ {
+		if _, ok := r.Lookup(context.Background(), s.URL); ok {
+			t.Fatal("Lookup() = true with fetching off, want no icon")
+		}
+	}
+	if s.total() != 0 {
+		t.Errorf("fetching off still reached the network: %v", s.seen())
+	}
+	if entries, _, _ := r.Stats(); entries != 0 {
+		t.Errorf("cache holds %d entries with fetching off, want 0 (nothing may be remembered as fetched)", entries)
+	}
+}
+
+func TestAutoOffKeepsLocalDir(t *testing.T) {
+	s := iconSite(t)
+
+	dir := t.TempDir()
+	local := []byte(`<svg xmlns="http://www.w3.org/2000/svg"><rect/></svg>`)
+	if err := os.WriteFile(filepath.Join(dir, "127.0.0.1.svg"), local, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	r := autoOff(t, Options{Dir: dir})
+	r.Allow([]string{s.URL})
+
+	// The host keeps an icon...
+	icon, ok := r.Lookup(context.Background(), s.URL)
+	if !ok {
+		t.Fatal("Lookup() = false, want the icon from --icon-dir")
+	}
+	if !bytes.Equal(icon.Data, local) {
+		t.Errorf("Lookup() data = %q, want the local SVG", icon.Data)
+	}
+	// ...but the host that has none is not fetched to fill the gap.
+	other := newSite(t, map[string]http.HandlerFunc{
+		"/favicon.ico": image(pngBytes, "image/png"),
+	})
+	// Both test sites live on 127.0.0.1, and a local file is keyed by host with
+	// the port stripped -- so this second site would be answered by the same
+	// local file. Clear the file to make it a host with no local icon at all.
+	if err := os.Remove(filepath.Join(dir, "127.0.0.1.svg")); err != nil {
+		t.Fatal(err)
+	}
+	r.Allow([]string{s.URL, other.URL})
+	if _, ok := r.Lookup(context.Background(), other.URL); ok {
+		t.Error("Lookup() = true for a host with no local file, want no icon")
+	}
+	if s.total() != 0 || other.total() != 0 {
+		t.Errorf("fetching off reached the network: %v %v", s.seen(), other.seen())
+	}
+}
+
+func TestWarmDoesNothingWithAutoOff(t *testing.T) {
+	s := iconSite(t)
+	r := autoOff(t, Options{})
+	r.Allow([]string{s.URL})
+	r.Warm(context.Background(), []string{s.URL, s.URL + "/page"})
+
+	// Warm is asynchronous, so give a fetch every chance to show up before
+	// declaring that none happened.
+	time.Sleep(50 * time.Millisecond)
+	if s.total() != 0 {
+		t.Errorf("Warm fetched with auto off: %v", s.seen())
+	}
+	if entries, _, _ := r.Stats(); entries != 0 {
+		t.Errorf("Warm cached %d entries with auto off, want 0", entries)
+	}
+}
+
+func TestWarmSkipsHostsWithLocalIcon(t *testing.T) {
+	s := iconSite(t)
+
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "127.0.0.1.png"), pngBytes, 0o600); err != nil {
+		t.Fatalf("WriteFile() error = %v", err)
+	}
+	r := testResolver(t, Options{Dir: dir})
+	r.Allow([]string{s.URL})
+	r.Warm(context.Background(), []string{s.URL})
+
+	time.Sleep(50 * time.Millisecond)
+	if s.total() != 0 {
+		t.Errorf("Warm fetched a host that --icon-dir already answers, spending exactly the traffic the directory avoids: %v", s.seen())
+	}
+}
+
 func TestLookupIgnoresOversizedLocalIcon(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "127.0.0.1.png"), bytes.Repeat([]byte{0x01}, 4096), 0o600); err != nil {
@@ -345,8 +405,7 @@ func TestLookupIgnoresOversizedLocalIcon(t *testing.T) {
 	}
 
 	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
+		"/favicon.ico": image(pngBytes, "image/png"),
 	})
 	r := testResolver(t, Options{Dir: dir, MaxBytes: 1024})
 	r.Allow([]string{s.URL})
@@ -385,11 +444,13 @@ func TestNegativeCaching(t *testing.T) {
 			http.Error(w, "boom", http.StatusInternalServerError)
 		},
 	})
-	r := testResolver(t, Options{FailureTTL: time.Minute})
+	// The zero-value FailureTTL is the CLI's behaviour, so this is the test that
+	// pins "an icon that could not be fetched is never fetched again".
+	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
 
 	if _, ok := r.Lookup(context.Background(), s.URL); ok {
-		t.Fatal("Lookup() = true for a 500 page, want false")
+		t.Fatal("Lookup() = true for a 500 on /favicon.ico, want false")
 	}
 	first := s.total()
 	if first == 0 {
@@ -403,6 +464,14 @@ func TestNegativeCaching(t *testing.T) {
 	}
 	if got := s.total(); got != first {
 		t.Fatalf("upstream requests grew from %d to %d; the failure was not cached", first, got)
+	}
+
+	// A warm pass -- which is what every config reload does -- must not quietly
+	// retry either, or the no-retry promise only holds for browser requests.
+	r.Warm(context.Background(), []string{s.URL})
+	time.Sleep(100 * time.Millisecond)
+	if got := s.total(); got != first {
+		t.Fatalf("Warm() retried a remembered failure: requests grew from %d to %d", first, got)
 	}
 
 	entries, hits, misses := r.Stats()
@@ -435,10 +504,7 @@ func TestNegativeCacheExpires(t *testing.T) {
 }
 
 func TestTTLExpiry(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-	})
+	s := iconSite(t)
 	r := testResolver(t, Options{TTL: 40 * time.Millisecond})
 	r.Allow([]string{s.URL})
 
@@ -448,31 +514,22 @@ func TestTTLExpiry(t *testing.T) {
 	if _, ok := r.Lookup(context.Background(), s.URL); !ok {
 		t.Fatal("second Lookup() = false")
 	}
-	if got := s.hits("/"); got != 1 {
-		t.Fatalf("page fetches = %d, want 1 while the entry is fresh", got)
+	if got := s.hits("/favicon.ico"); got != 1 {
+		t.Fatalf("fetches = %d, want 1 while the entry is fresh", got)
 	}
 
 	time.Sleep(80 * time.Millisecond)
 	if _, ok := r.Lookup(context.Background(), s.URL); !ok {
 		t.Fatal("third Lookup() = false")
 	}
-	if got := s.hits("/"); got != 2 {
-		t.Fatalf("page fetches = %d, want 2 after the entry expired", got)
+	if got := s.hits("/favicon.ico"); got != 2 {
+		t.Fatalf("fetches = %d, want 2 after the entry expired", got)
 	}
 }
 
 func TestConcurrentLookupFetchesOnce(t *testing.T) {
-	var pages int32
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/": func(w http.ResponseWriter, r *http.Request) {
-			atomic.AddInt32(&pages, 1)
-			// Hold the flight open so every other caller has to join it.
-			time.Sleep(100 * time.Millisecond)
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = io.WriteString(w, `<link rel="icon" href="/a.png">`)
-		},
-		"/a.png": image(pngBytes, "image/png"),
-	})
+	var fetches int32
+	s := slowIconSite(t, &fetches, 100*time.Millisecond)
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
 
@@ -517,11 +574,8 @@ func TestConcurrentLookupFetchesOnce(t *testing.T) {
 			t.Fatalf("Lookup() #%d = false, want the shared icon", i)
 		}
 	}
-	if got := atomic.LoadInt32(&pages); got != 1 {
-		t.Errorf("page fetches = %d, want 1 for %d concurrent lookups", got, n)
-	}
-	if got := s.hits("/a.png"); got != 1 {
-		t.Errorf("icon fetches = %d, want 1 for %d concurrent lookups", got, n)
+	if got := atomic.LoadInt32(&fetches); got != 1 {
+		t.Errorf("icon fetches = %d for %d concurrent lookups on one URL, want 1", got, n)
 	}
 }
 
@@ -547,96 +601,16 @@ func TestLookupRejectsBadURLs(t *testing.T) {
 	}
 }
 
-func TestLookupHostilePages(t *testing.T) {
-	cases := []struct {
-		name string
-		body string
-	}{
-		{"javascript href", `<link rel="icon" href="javascript:alert(1)">`},
-		{"vbscript href", `<link rel="icon" href="vbscript:msgbox(1)">`},
-		{"data uri href", `<link rel="icon" href="data:image/png;base64,AAAA">`},
-		{"javascript base", `<base href="javascript:alert(1)"><link rel="icon" href="a.png">`},
-		{"base without href", `<base target="_blank"><link rel="icon" href="/a.png">`},
-		{"unterminated tag", `<html><head><link rel="shortcut`},
-		{"truncated mid attribute", `<html><head><link rel="icon" href="/a.png`},
-		{"angle bracket flood", "<html><head>" + strings.Repeat("<", 4096)},
-		{"quote flood", `<link rel="icon" href="` + strings.Repeat(`"`, 512)},
-		{"no markup", `just text`},
-		{"empty body", ``},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			s := newSite(t, map[string]http.HandlerFunc{"/": page(tc.body)})
-			r := testResolver(t, Options{})
-			r.Allow([]string{s.URL})
-
-			// Nothing here resolves to an image: the catch-all page route
-			// answers text/html for every fallback path too.
-			if icon, ok := r.Lookup(context.Background(), s.URL); ok {
-				t.Fatalf("Lookup() = true (%q), want a clean refusal", icon.Data)
-			}
-		})
-	}
-
-	// A nil context must not panic either.
-	s := newSite(t, map[string]http.HandlerFunc{"/": page(``)})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-	//lint:ignore SA1012 deliberately hostile: a nil context must not panic
-	if _, ok := r.Lookup(nil, s.URL); ok {
-		t.Error("Lookup(nil, ...) = true, want false")
-	}
-}
-
-func TestTruncatedPageStillFindsIcon(t *testing.T) {
-	// The document is cut off, but the link tag itself is complete: leniency
-	// here is what makes a truncated read harmless rather than fatal.
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<html><head><link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-	})
-	r := testResolver(t, Options{})
-	r.Allow([]string{s.URL})
-
-	if _, ok := r.Lookup(context.Background(), s.URL); !ok {
-		t.Errorf("Lookup() = false for a truncated document with a complete link (paths: %v)", s.seen())
-	}
-}
-
 func TestLookupRejectsOversizedIcon(t *testing.T) {
 	huge := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x01}, 4096)...)
 	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(huge, "image/png"),
+		"/favicon.ico": image(huge, "image/png"),
 	})
 	r := testResolver(t, Options{MaxBytes: 1024})
 	r.Allow([]string{s.URL})
 
 	if _, ok := r.Lookup(context.Background(), s.URL); ok {
 		t.Error("Lookup() = true for an icon past MaxBytes, want false")
-	}
-}
-
-func TestLookupTruncatesLongHTML(t *testing.T) {
-	// The icon link sits past MaxHTMLBytes, so it is never read; the resolver
-	// must still finish instead of buffering the page.
-	filler := strings.Repeat("<!-- filler -->", 200)
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(filler + `<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-		"/favicon.ico": func(w http.ResponseWriter, r *http.Request) {
-			http.NotFound(w, r)
-		},
-	})
-	r := testResolver(t, Options{MaxHTMLBytes: 512})
-	r.Allow([]string{s.URL})
-
-	if _, ok := r.Lookup(context.Background(), s.URL); ok {
-		t.Error("Lookup() = true for a link past MaxHTMLBytes, want false")
-	}
-	if got := s.hits("/favicon.ico"); got != 1 {
-		t.Errorf("requests for the fallback = %d, want 1", got)
 	}
 }
 
@@ -672,8 +646,7 @@ func TestContentTypeSniffing(t *testing.T) {
 				_, _ = w.Write(tc.body)
 			}
 			s := newSite(t, map[string]http.HandlerFunc{
-				"/":      page(`<link rel="icon" href="/a.png">`),
-				"/a.png": iconHandler,
+				"/favicon.ico": iconHandler,
 			})
 			r := testResolver(t, Options{})
 			r.Allow([]string{s.URL})
@@ -690,10 +663,7 @@ func TestContentTypeSniffing(t *testing.T) {
 }
 
 func TestLRUBoundsEntries(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-	})
+	s := iconSite(t)
 	r := testResolver(t, Options{MaxEntries: 3})
 	r.Allow([]string{s.URL})
 
@@ -719,164 +689,12 @@ func TestLRUBoundsEntries(t *testing.T) {
 	}
 }
 
-func TestRelTokens(t *testing.T) {
-	cases := []struct {
-		rel  string
-		want bool
-	}{
-		{"icon", true},
-		{"shortcut icon", true},
-		{"apple-touch-icon", true},
-		{"apple-touch-icon-precomposed", true},
-		{"mask-icon", true},
-		{"ICON", true},
-		{"Apple-Touch-Icon-Precomposed", true},
-		{"  icon  ", true},
-		{"alternate icon", true},
-		{"stylesheet", false},
-		{"iconify", false},
-		{"shortcut", false},
-		{"", false},
-	}
-
-	for _, tc := range cases {
-		if got := iconRel(tc.rel); got != tc.want {
-			t.Errorf("iconRel(%q) = %v, want %v", tc.rel, got, tc.want)
-		}
-	}
-}
-
-func TestIconSize(t *testing.T) {
-	cases := []struct {
-		in   string
-		want int
-	}{
-		{"", 0},
-		{"192x192", 192 * 192},
-		{"32x32", 32 * 32},
-		{"16x16 32x32", 32 * 32},
-		// "any" is not a number, so it cannot outrank a sized icon; it is only
-		// preferred by being listed first.
-		{"any", 0},
-		{"ANY", 0},
-		{"32X32", 32 * 32},
-		{"banana", 0},
-		{"0x0", 0},
-		{"-1x-1", 0},
-	}
-
-	for _, tc := range cases {
-		if got := iconSize(tc.in); got != tc.want {
-			t.Errorf("iconSize(%q) = %d, want %d", tc.in, got, tc.want)
-		}
-	}
-}
-
-func TestParseIconLink(t *testing.T) {
-	pageURL, err := url.Parse("http://example.com/dir/page.html")
-	if err != nil {
-		t.Fatalf("url.Parse() error = %v", err)
-	}
-
-	cases := []struct {
-		name string
-		doc  string
-		want string
-	}{
-		{
-			name: "absolute",
-			doc:  `<link rel="icon" href="https://cdn.example.com/i.png">`,
-			want: "https://cdn.example.com/i.png",
-		},
-		{
-			name: "root relative",
-			doc:  `<link rel="icon" href="/i.png">`,
-			want: "http://example.com/i.png",
-		},
-		{
-			name: "document relative",
-			doc:  `<link rel="icon" href="i.png">`,
-			want: "http://example.com/dir/i.png",
-		},
-		{
-			name: "base root relative",
-			doc:  `<base href="/static/"><link rel="icon" href="i.png">`,
-			want: "http://example.com/static/i.png",
-		},
-		{
-			name: "base absolute cross host",
-			doc:  `<base href="https://cdn.example.com/x/"><link rel="icon" href="i.png">`,
-			want: "https://cdn.example.com/x/i.png",
-		},
-		{
-			name: "javascript base",
-			doc:  `<base href="javascript:alert(1)"><link rel="icon" href="i.png">`,
-			want: "",
-		},
-		{
-			name: "javascript href",
-			doc:  `<link rel="icon" href="javascript:alert(1)">`,
-			want: "",
-		},
-		{
-			name: "protocol relative",
-			doc:  `<link rel="icon" href="//cdn.example.com/i.png">`,
-			want: "http://cdn.example.com/i.png",
-		},
-		{
-			name: "largest sizes wins",
-			doc: `<link rel="icon" sizes="16x16" href="/s.png">
-			      <link rel="icon" sizes="512x512" href="/l.png">`,
-			want: "http://example.com/l.png",
-		},
-		{
-			name: "first of equal sizes wins",
-			doc: `<link rel="icon" sizes="32x32" href="/first.png">
-			      <link rel="icon" sizes="32x32" href="/second.png">`,
-			want: "http://example.com/first.png",
-		},
-		{
-			name: "unsized beats nothing only when there is nothing",
-			doc:  `<link rel="icon" href="/only.png">`,
-			want: "http://example.com/only.png",
-		},
-		{
-			name: "no icon link",
-			doc:  `<link rel="stylesheet" href="/a.css">`,
-			want: "",
-		},
-		{
-			name: "iconify is not an icon",
-			doc:  `<link rel="iconify" href="/a.png">`,
-			want: "",
-		},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			got := parseIconLink(strings.NewReader("<html><head>"+tc.doc+"</head></html>"), pageURL)
-			if tc.want == "" {
-				if got != nil {
-					t.Fatalf("parseIconLink() = %q, want nil", got)
-				}
-				return
-			}
-			if got == nil {
-				t.Fatalf("parseIconLink() = nil, want %q", tc.want)
-			}
-			if got.String() != tc.want {
-				t.Errorf("parseIconLink() = %q, want %q", got, tc.want)
-			}
-		})
-	}
-}
-
 func TestWarmResolvesAndBoundsConcurrency(t *testing.T) {
 	const n = 24
 
 	var inFlight, maxInFlight int32
 	s := newSite(t, map[string]http.HandlerFunc{
-		"/": func(w http.ResponseWriter, r *http.Request) {
+		"/favicon.ico": func(w http.ResponseWriter, r *http.Request) {
 			cur := atomic.AddInt32(&inFlight, 1)
 			for {
 				peak := atomic.LoadInt32(&maxInFlight)
@@ -887,10 +705,9 @@ func TestWarmResolvesAndBoundsConcurrency(t *testing.T) {
 			time.Sleep(30 * time.Millisecond)
 			atomic.AddInt32(&inFlight, -1)
 
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			_, _ = io.WriteString(w, `<link rel="icon" href="/a.png">`)
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(pngBytes)
 		},
-		"/a.png": image(pngBytes, "image/png"),
 	})
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
@@ -927,10 +744,7 @@ func TestWarmResolvesAndBoundsConcurrency(t *testing.T) {
 }
 
 func TestWarmIgnoresDisallowedAndFresh(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-	})
+	s := iconSite(t)
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
 
@@ -990,10 +804,7 @@ func TestWarmDoesNotLeakOnCancelledContext(t *testing.T) {
 }
 
 func TestStatsCounts(t *testing.T) {
-	s := newSite(t, map[string]http.HandlerFunc{
-		"/":      page(`<link rel="icon" href="/a.png">`),
-		"/a.png": image(pngBytes, "image/png"),
-	})
+	s := iconSite(t)
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
 
@@ -1017,8 +828,15 @@ func TestDefaults(t *testing.T) {
 	if r.opts.TTL != defaultTTL || r.opts.FailureTTL != defaultFailureTTL {
 		t.Errorf("TTL defaults = %v/%v, want %v/%v", r.opts.TTL, r.opts.FailureTTL, defaultTTL, defaultFailureTTL)
 	}
+	// Pinned separately from the comparison above so that changing the default
+	// has to be deliberate. Zero is a policy, not an oversight: an icon that
+	// could not be fetched is not fetched again, so a config full of icon-less
+	// hosts costs one request per host for the life of the process.
+	if defaultFailureTTL != 0 {
+		t.Errorf("defaultFailureTTL = %v, want 0 (never retry)", defaultFailureTTL)
+	}
 	if r.opts.MaxEntries != defaultMaxEntries || r.opts.MaxBytes != defaultMaxBytes ||
-		r.opts.MaxHTMLBytes != defaultMaxHTMLBytes || r.opts.Timeout != defaultTimeout {
+		r.opts.Timeout != defaultTimeout {
 		t.Errorf("numeric defaults = %+v, want the package defaults", r.opts)
 	}
 	if r.opts.UserAgent == "" {

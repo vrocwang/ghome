@@ -20,6 +20,13 @@
 
 坏配置把页面卡住时，直接 `git revert` 那次提交即可，不需要重启服务。
 
+## 缓存文件
+
+| 现象 | 原因 | 处理 |
+| --- | --- | --- |
+| 日志出现 `could not write the cache file ... permission denied` | 进程（uid 65534）对 `--cache-file` 所在**目录**没有写权限。Docker 下几乎总是 `/data` 被挂成了 root 建的 bind mount，镜像里 `chown 65534` 的 `/data` 被挂载点盖掉了 | 用 named volume（`ghome-data:/data`），或在宿主上 `install -d -o 65534 -g 65534 -m 0700 <dir>`。**注意写的是目录权限**：`writeAtomic` 是"写 `.tmp` 再 rename"，两步都要求目录可写 |
+| 只看到写缓存的告警，页面却一切正常 | 缓存只影响"forge 不可达时重启还能服务上一版" | 别忽略它：真正出问题的是下一次 forge 挂掉时的重启，那时会直接 503 并被健康检查判为不健康 |
+
 ## 实时更新
 
 | 现象 | 原因 | 处理 |
@@ -40,6 +47,7 @@
 | 内网服务图标是同一个 | `/api/icon` 按 host 查，一个 host 只取配置里第一个用它的链接 | 用链接自己的 `icon:` 分别指定 |
 | 换了 `--icon-dir` 里的文件，页面还是旧图标 | 图标响应带 7 天缓存**且没有 ETag/Last-Modified**，浏览器无从重验证 | 硬刷新（`Cmd/Ctrl+Shift+R`）；配置 revision 变化也会让 URL 里的 `?v=` 变，从而自动失效 |
 | 某个图标 404 | 该 host 不在配置里，或它只被私密条目使用 | 这是设计内的，见 [README 的私密链接](../README.md#私密链接) |
+| 所有图标都是首字母头像，日志里 iconsCached 一直是 0 | `--icon-fetch=off`，或服务端到各站点的出站被防火墙挡了 | 前者是有意的；想要真图标就放 `--icon-dir` 或给链接写 `icon:` |
 
 ## 状态灯
 

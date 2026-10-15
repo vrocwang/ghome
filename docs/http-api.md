@@ -35,7 +35,8 @@
 | `GET` | `/favicon.ico` | 站点图标，固定以 SVG 提供，可被 `--web-dir` 覆盖 |
 | `GET` | `/assets/*` | 内嵌资源，可被 `--web-dir` 逐文件覆盖 |
 | `GET` | `/api/nav` | 当前配置 + 版本元信息；尚未加载到配置时返回 503 |
-| `GET` | `/api/status` | 探测结果；未开启探测时返回 `{"enabled":false}` 而不是错误 || `GET` | `/api/icon?h=<host>` | 图标代理。仅限配置里出现过的 host，响应带沙箱 CSP |
+| `GET` | `/api/status` | 探测结果；未开启探测时返回 `{"enabled":false}` 而不是错误 |
+| `GET` | `/api/icon?h=<host>` | 图标代理。仅限配置里出现过的 host，响应带沙箱 CSP。`--icon-fetch=off` 时只回答 `--icon-dir` 里有文件的 host，其余 404（前端据此渲染首字母头像） |
 | `GET` | `/api/events` | SSE 流。连上先发 `hello`（带当前 revision），之后每次变更发 `changed`。并发上限 256，超出返回 503（一个标签页一条，正常远够；`/healthz` 的 `subscribers` 是当前数） |
 | `POST` | `/api/webhook` | Gitea 推送回调，HMAC 校验 |
 | `POST` | `/api/refresh` | 手动触发重载，需要 `Authorization: Bearer <admin-token>` |

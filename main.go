@@ -55,6 +55,7 @@ type options struct {
 	cacheFile     string
 	webDir        string
 	iconDir       string
+	iconFetch     string
 	logLevel      string
 	dumpWeb       string
 	healthcheck   bool
@@ -101,8 +102,15 @@ func run() error {
 	st := store.New()
 	loadCache(o.cacheFile, st, log)
 
-	reportIconDir(o.iconDir, log)
-	iconCache := icons.New(icons.Options{Dir: o.iconDir, Logger: log})
+	// Parsed before anything is wired up, so a typo fails at startup with the
+	// accepted values spelled out instead of being read as "on" forever.
+	fetchIcons, err := parseIconFetch(o.iconFetch)
+	if err != nil {
+		return err
+	}
+
+	reportIconDir(o.iconDir, fetchIcons, log)
+	iconCache := icons.New(icons.Options{Dir: o.iconDir, NoFetch: !fetchIcons, Logger: log})
 	probes := newProber(ctx, st, log)
 
 	// Every piece of derived state is kept in step from this one function, so
@@ -221,6 +229,7 @@ func run() error {
 		"manual_refresh", enabledLabel(o.adminToken != ""),
 		"web_dir", orDefault(o.webDir, "embedded"),
 		"icon_dir", orDefault(o.iconDir, "none"),
+		"icon_fetch", fetchLabel(fetchIcons),
 	)
 	switch {
 	case o.poll <= 0 && o.webhookSecret == "" && o.adminToken == "":
@@ -425,6 +434,9 @@ func parseFlags() options {
 		"serve the UI from this directory instead of the embedded copy; missing files fall back to embedded")
 	fs.StringVar(&o.iconDir, "icon-dir", env("GHOME_ICON_DIR", ""),
 		"directory of local icon files named <host>.png/.svg/.ico, used before fetching a site")
+	fs.StringVar(&o.iconFetch, "icon-fetch", env("GHOME_ICON_FETCH", "auto"),
+		"auto fetches <host>/favicon.ico when a host has no local file; off never "+
+			"fetches, so every link without one falls back to a generated letter avatar")
 	fs.StringVar(&o.logLevel, "log-level", env("GHOME_LOG_LEVEL", "info"),
 		"log level: debug, info, warn or error")
 	fs.BoolVar(&o.healthcheck, "healthcheck", false,
@@ -475,20 +487,43 @@ rather than configure a running server.
 // icons are decoration, and taking the navigation page down over a missing
 // icon directory would be the wrong trade. But staying silent is worse still,
 // because a typo here fails in a way nobody notices.
-func reportIconDir(dir string, log *slog.Logger) {
+//
+// The warning names the actual consequence, which depends on fetch: with
+// fetching off an unusable directory means no icons at all, rather than a
+// fallback to the network.
+func reportIconDir(dir string, fetch bool, log *slog.Logger) {
 	if dir == "" {
 		return
+	}
+	fallback := "every icon will be generated from the link name"
+	if fetch {
+		fallback = "every icon will be fetched over the network"
 	}
 	count, err := icons.LocalIcons(dir)
 	switch {
 	case err != nil:
-		log.Warn("--icon-dir is unusable, so local icons are disabled and every icon will be fetched over the network",
+		log.Warn("--icon-dir is unusable, so local icons are disabled and "+fallback,
 			"dir", dir, "error", err)
 	case count == 0:
 		log.Warn("--icon-dir contains no usable icon files, so it has no effect; expected names like <host>.svg or <host>.png",
 			"dir", dir)
 	default:
 		log.Info("local icon directory ready", "dir", dir, "icons", count)
+	}
+}
+
+// parseIconFetch reads --icon-fetch. Only the two documented values are
+// accepted: anything else is far more likely to be a typo than an intent, and
+// silently treating it as "auto" is how a box ends up making the outbound
+// requests it was configured not to make.
+func parseIconFetch(v string) (bool, error) {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "auto", "":
+		return true, nil
+	case "off", "none":
+		return false, nil
+	default:
+		return false, fmt.Errorf("unknown --icon-fetch %q: expected auto or off", v)
 	}
 }
 
@@ -756,6 +791,16 @@ func enabledLabel(on bool) string {
 		return "enabled"
 	}
 	return "disabled"
+}
+
+// fetchLabel is the icon equivalent of enabledLabel: "auto" is the default and
+// means outbound fetches are allowed, so a startup line reading "off" is the
+// one worth noticing.
+func fetchLabel(on bool) string {
+	if on {
+		return "auto"
+	}
+	return "off"
 }
 
 func orDefault(v, fallback string) string {

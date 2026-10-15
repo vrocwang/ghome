@@ -7,7 +7,9 @@
 - **三套布局**：`grid` 精致卡片 / `dashboard` 紧凑密集 / `list` 单列。
 - **私有仓可用**：token 只存在服务端。
 - **私密链接**：标记 `private: true` 的条目，只有拿得出配置仓读权限令牌的人才收得到。
-- **图标由服务端解析并缓存**：哈希命名的图标、没有 `favicon.ico` 的内网站点也能显示。
+- **图标由服务端取回并缓存**：只请求每个 host 根上的 `favicon.ico`，一次请求、不下载页面；
+  内网 http 站点和 IP 直连都能显示。图标放在哈希路径上的站点会回退到字母头像，
+  用 `--icon-dir` 补一份即可。
 - **可选的服务状态灯**，默认关闭，关着时零探测流量。
 - **单二进制**：静态编译的 Go，空载内存约 13 MB。
 - **推错配置不会把页面搞挂**：结构性问题整份拒绝，继续服务上一版。
@@ -286,9 +288,10 @@ status:
 ## 图标是怎么来的
 
 页面不让浏览器直接去第三方站点取 `favicon.ico`，而是走 `/api/icon?h=<host>`，由服务端解析和缓存。
-查找顺序是 `--icon-dir` 本地文件 → 服务端内存缓存 → 联网解析 → 浏览器缓存，所以它不是每次访问都去抓。
-联网那一层会解析页面里的 `<link rel="icon">`（含哈希命名的图标），没有就退到 `<host>/favicon.ico`，
-最后校验返回的确实是图片；解析不到时前端回退到字母头像。
+查找顺序是 `--icon-dir` 本地文件 → 服务端内存缓存 → `<host>/favicon.ico` → 浏览器缓存，所以它既不是
+每次访问都去抓，也**从不下载页面 HTML**：一个站点一次请求。图标路径是哈希的站点（例如
+`/assets/favicon-a1b2c3.svg`）因此拿不到图标，前端回退到字母头像；这类站点用 `--icon-dir` 放一份，或给
+那几个链接写自己的 `icon:` 字段即可。
 
 内网服务大多没有 favicon、DNS 也可能解析不了，所以本地图标目录是可靠解：文件名是 `<host>` 加扩展名，
 host **转小写并剥掉端口**，所以 `nas:8080` 和 `nas:9090` 都找 `nas.svg`。
@@ -327,6 +330,7 @@ ghome --icon-dir=/var/lib/ghome/icons
 | `--cache-file` | `GHOME_CACHE_FILE` | | 持久化最后一份可用配置（含仓库里的 `custom.css`），重启时 forge 不可达也能服务 |
 | `--web-dir` | `GHOME_WEB_DIR` | | 从目录提供 UI，逐文件回退到内嵌副本 |
 | `--icon-dir` | `GHOME_ICON_DIR` | | 本地图标目录，优先于联网抓取 |
+| `--icon-fetch` | `GHOME_ICON_FETCH` | `auto` | `off` 时服务端**完全不联网抓图标**；没有本地文件的链接回退到自动生成的首字母头像 |
 | `--dump-web` | | | 把内嵌前端导出到目录后退出（`--web-dir` 的起点） |
 | `--healthcheck` | | | 请求自己的 `/healthz`，200 退出 0；给容器健康检查用 |
 | `--version` | | | 打印版本后退出 |
@@ -337,6 +341,14 @@ ghome --icon-dir=/var/lib/ghome/icons
 兜底**——webhook 要是被上游挡住（比如被反代的 Basic 认证拦了），页面就再也不会更新，而 `/healthz`
 还会一直报 `ok`。所以先用 `10m` 这类宽松值过渡，确认 webhook 稳定了再彻底关掉。非法值的处理两条路
 不一样：`GHOME_POLL=0.5` 打一条警告并回退到 60s，`--poll=0.5` 是启动即报错退出。
+
+`--icon-fetch=off` 关掉图标的联网抓取：启动和每次配置重载都不再请求任何 `favicon.ico`，
+`/api/icon` 对没有本地文件的 host 一律 404，前端随即渲染自动生成的首字母头像。`--icon-dir` 仍然
+优先且照常生效——它本来就不联网，所以两者一起用就是"只认你放的图标"。非法值（比如 `of`）是启动
+即报错，不会静默当成 `auto`。细节见 [`docs/icons.md`](docs/icons.md)。
+
+拿不到的图标**不会重试**：一个 host 这一次没取到，本进程生命周期内不会再问它（`--icon-fetch=off`
+只是把这件事推到极致）。所以某一刻站点没起来导致的字母头像，要重启 ghome 才会再试。
 
 HTTP 接口（含 `/healthz` 的完整返回）见 [`docs/http-api.md`](docs/http-api.md)。日常只有两个会手敲：
 `GET /healthz` 看状态，`POST /api/refresh` 手动触发重载（需要 `--admin-token`）。
@@ -353,7 +365,7 @@ HTTP 接口（含 `/healthz` 的完整返回）见 [`docs/http-api.md`](docs/htt
 | push 了但页面要等一分钟 | webhook 没通，走的轮询 | 网页钩子的"最近投递"：成功是 **202**，401 是密钥不一致 |
 | webhook 报 202 但没更新 | 推的不是被监听的分支 | 看响应体里的 `"status":"ignored"` 和 reason |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或日志里的 `config warning` |
-| 图标都是字母头像 | 站点没有可解析的图标，或服务端取不到 | 用 `icon:` 显式指定，或把图标放进 `--icon-dir` |
+| 图标都是字母头像 | 站点没有可解析的图标，或服务端取不到 | 用 `icon:` 显式指定，或把图标放进 `--icon-dir`；全部如此且 `iconsCached` 恒为 0 时先看是不是 `--icon-fetch=off` |
 | 放了本地图标却不生效 | 文件名或路径不对（必须是 `<host>` 加扩展名，host 不含端口） | 启动日志会报 `local icon directory ready, icons=N` |
 | 状态点一直是灰色 | 探测未开启，或该链接不可探测（非 http/https） | 确认 `status.enabled` 和该链接的 `probe` |
 | 实时更新一顿一顿的 | nginx 缓冲了 SSE | `proxy_buffering off;` + `proxy_read_timeout 1h;` |

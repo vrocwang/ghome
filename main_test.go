@@ -96,6 +96,48 @@ func TestEnabledLabel(t *testing.T) {
 	}
 }
 
+// The switch is read as a string, so the values it accepts are the whole
+// contract. A typo has to fail loudly: silently reading "of" as "auto" is how a
+// box ends up making the outbound requests it was told not to make.
+func TestParseIconFetch(t *testing.T) {
+	on := map[string]bool{
+		"auto":  true,
+		"":      true, // the flag's own default is applied before this runs
+		"AUTO":  true,
+		" auto": true,
+		"off":   false,
+		"OFF":   false,
+		"none":  false,
+	}
+	for in, want := range on {
+		got, err := parseIconFetch(in)
+		if err != nil {
+			t.Errorf("parseIconFetch(%q) error = %v, want none", in, err)
+			continue
+		}
+		if got != want {
+			t.Errorf("parseIconFetch(%q) = %v, want %v", in, got, want)
+		}
+	}
+
+	for _, in := range []string{"of", "false", "no", "0", "yes"} {
+		got, err := parseIconFetch(in)
+		if err == nil {
+			t.Errorf("parseIconFetch(%q) = %v with no error, want a rejection", in, got)
+			continue
+		}
+		if !strings.Contains(err.Error(), "auto or off") {
+			t.Errorf("parseIconFetch(%q) error = %v, want the accepted values named", in, err)
+		}
+	}
+}
+
+func TestFetchLabel(t *testing.T) {
+	if fetchLabel(true) != "auto" || fetchLabel(false) != "off" {
+		t.Error("fetchLabel() is wrong")
+	}
+}
+
 func TestLooksLikeCommit(t *testing.T) {
 	sha1Ref := strings.Repeat("0123456789abcdef", 2) + "01234567" // 40 chars
 	cases := map[string]bool{
@@ -243,28 +285,41 @@ const minimalNav = "groups:\n  - name: x\n    links:\n      - name: a\n        u
 // A typo'd --icon-dir used to fail in complete silence: every lookup just fell
 // through to the network, so the only symptom was "why are my icons wrong".
 func TestReportIconDirSaysWhatWillHappen(t *testing.T) {
-	capture := func(dir string) string {
+	capture := func(dir string, fetch bool) string {
 		t.Helper()
 		var buf bytes.Buffer
-		reportIconDir(dir, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
+		reportIconDir(dir, fetch, slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelDebug})))
 		return buf.String()
 	}
 
 	t.Run("unset says nothing", func(t *testing.T) {
-		if got := capture(""); got != "" {
+		if got := capture("", true); got != "" {
 			t.Errorf("reportIconDir(\"\") logged %q, want silence", got)
 		}
 	})
 
 	t.Run("missing directory warns", func(t *testing.T) {
-		got := capture(filepath.Join(t.TempDir(), "nope"))
+		got := capture(filepath.Join(t.TempDir(), "nope"), true)
 		if !strings.Contains(got, "WARN") || !strings.Contains(got, "unusable") {
 			t.Errorf("reportIconDir() logged %q, want a warning about an unusable path", got)
 		}
 	})
 
+	// With fetching off there is no network to fall back to, and the warning has
+	// to say so: "will be fetched over the network" would be a lie, and the
+	// operator would go looking for a fetch that is switched off on purpose.
+	t.Run("missing directory names the real fallback when fetching is off", func(t *testing.T) {
+		got := capture(filepath.Join(t.TempDir(), "nope"), false)
+		if !strings.Contains(got, "unusable") || !strings.Contains(got, "generated from the link name") {
+			t.Errorf("reportIconDir() logged %q, want a warning naming the generated fallback", got)
+		}
+		if strings.Contains(got, "fetched over the network") {
+			t.Errorf("reportIconDir() logged %q, which contradicts --icon-fetch=off", got)
+		}
+	})
+
 	t.Run("empty directory warns that it has no effect", func(t *testing.T) {
-		got := capture(t.TempDir())
+		got := capture(t.TempDir(), true)
 		if !strings.Contains(got, "WARN") || !strings.Contains(got, "no usable icon files") {
 			t.Errorf("reportIconDir() logged %q, want a warning about an empty directory", got)
 		}
@@ -277,7 +332,7 @@ func TestReportIconDirSaysWhatWillHappen(t *testing.T) {
 				t.Fatal(err)
 			}
 		}
-		got := capture(dir)
+		got := capture(dir, true)
 		if !strings.Contains(got, "ready") || !strings.Contains(got, "icons=2") {
 			t.Errorf("reportIconDir() logged %q, want the icon count", got)
 		}
