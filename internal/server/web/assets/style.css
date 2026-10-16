@@ -52,8 +52,10 @@
   --muted: #99a2b1;
   --border: #272c35;
 
-  --card-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
-  --card-shadow-hover: 0 2px 8px rgba(0, 0, 0, 0.45), 0 12px 28px rgba(0, 0, 0, 0.35);
+  /* No shadow tokens here on purpose: --card-shadow lives on :root and is
+     inherited in both themes, so a cardStyle preset states one look and a
+     custom.css can still override it (a rule in this block carries an extra
+     attribute and would win regardless of where custom.css is appended). */
 
   --ok: #3fbf85;
   --warn: #e0a83a;
@@ -715,4 +717,28 @@ kbd {
     animation-iteration-count: 1 !important;
     transition-duration: .001ms !important;
   }
+}
+
+/* Dark-mode values generated from nav.yaml.
+ *
+ * /theme.css cannot emit these itself: a :root[data-theme="dark"] rule there
+ * would outrank any bare :root rule in a custom.css the operator appends after
+ * it, so their own dark colour or shadow would silently lose. Instead the server
+ * parks dark values on --dark-* under plain :root, and this block -- the last
+ * specificity-1 rule in the cascade -- decides which one a theme uses.
+ *
+ * Every fallback is the built-in dark value, so a config that only colours the
+ * light theme keeps the dark theme exactly as designed. */
+:root[data-theme="dark"] {
+  --bg: var(--dark-bg, #0d0f13);
+  --surface: var(--dark-surface, #171a20);
+  --text: var(--dark-text, #e8eaee);
+  --muted: var(--dark-muted, #99a2b1);
+  --border: var(--dark-border, #272c35);
+  --accent: var(--dark-accent, #6f95ff);
+  /* Shadows are deliberately absent here. A cardStyle preset states one look
+     for both themes in /theme.css, which a custom.css can override; naming a
+     shadow in this block would take that override away, since this selector
+     outranks the :root a custom.css can reach. The built-in dark shadow at the
+     top of this file applies whenever no preset sets one. */
 }

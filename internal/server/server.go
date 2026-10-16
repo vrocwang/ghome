@@ -426,7 +426,14 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
+	// The budget has to outlast the resolver's own per-request timeout, or a slow
+	// site is cancelled while the fetch is still legitimate. That is not merely a
+	// slow answer: the resolver refuses to cache an outcome it cannot attribute
+	// to the site (icons.go, resolve), so the miss is never remembered and every
+	// page load re-runs the whole slow fetch. 20s covers the default 8s twice
+	// over, which is what "the caller gave up" has to mean before the resolver
+	// treats the result as the site's answer.
+	ctx, cancel := context.WithTimeout(r.Context(), 20*time.Second)
 	defer cancel()
 
 	data, contentType, ok := s.opts.Icons.Lookup(ctx, pageURL)
@@ -531,10 +538,9 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 	// apart, and so style.dark can override one colour without re-listing the rest.
 	light := map[string]string{}
 	dark := map[string]string{}
-	// Shadow presets are chosen by cardStyle rather than by the operator, and
-	// each one carries a value for both themes. Kept out of light/dark so a
-	// preset cannot be half-applied by a style.dark colour override.
-	var cardShadow, darkShadow map[string]string
+	// Shadow presets are chosen by cardStyle rather than by the operator and are
+	// kept out of light/dark so a colour override cannot half-apply one.
+	var cardShadow map[string]string
 	for _, c := range []struct{ prop, value string }{
 		{"--accent", style.Accent},
 		{"--bg", style.Background},
@@ -557,9 +563,11 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 	}
 	for name, value := range style.Dark {
 		// nav normalises the key and validates the value; this only maps the
-		// config's spelling onto the custom property it stands for.
+		// config's spelling onto the custom property it stands for. Dark values
+		// land on the matching --dark-* name, which the built-in stylesheet
+		// consumes, so that everything here can be emitted under plain :root.
 		if prop, ok := darkProps[name]; ok && value != "" {
-			dark[prop] = value
+			dark[darkName(prop)] = value
 		}
 	}
 
@@ -607,20 +615,11 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 	// cardStyle: flat used to come back with shadows the moment the page went
 	// dark. "flat" is flat in both; the other two are retuned for a dark
 	// surface, where a light-theme shadow is invisible anyway.
-	if cardShadow != nil {
-		darkShadow = map[string]string{}
-		switch style.CardStyle {
-		case "flat":
-			darkShadow["--card-shadow"] = "none"
-			darkShadow["--card-shadow-hover"] = "none"
-		case "soft":
-			darkShadow["--card-shadow"] = "0 1px 2px rgba(0,0,0,.45)"
-			darkShadow["--card-shadow-hover"] = "0 2px 6px rgba(0,0,0,.5), 0 10px 24px rgba(0,0,0,.4)"
-		case "strong":
-			darkShadow["--card-shadow"] = "0 6px 24px rgba(0,0,0,.55)"
-			darkShadow["--card-shadow-hover"] = "0 10px 34px rgba(0,0,0,.6)"
-		}
-	}
+	// cardShadow is emitted once, under :root, and inherited by the dark theme.
+	// Giving dark its own value would mean either a :root[data-theme="dark"]
+	// rule here or a --dark-* resolver in the stylesheet, and both outrank the
+	// :root a custom.css can reach -- so "flat" would stop being overridable.
+	// One look for both themes, flat really flat, override always possible.
 
 	writeBlock := func(selector string, props map[string]string) {
 		if len(props) == 0 {
@@ -644,14 +643,26 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 		}
 		b.WriteString("}\n")
 	}
-	// Light values first, so a dark override of the same property wins by
-	// coming later in the file.
+	// Everything generated goes under plain :root, including the dark values,
+	// which the built-in stylesheet picks up under [data-theme="dark"].
+	//
+	// Emitting a :root[data-theme="dark"] block here instead would outrank any
+	// custom.css the operator writes: that file is appended after this one, but
+	// a bare :root cannot beat a rule that carries an attribute. So a custom.css
+	// shadow or colour would silently lose in dark mode -- and only there, and
+	// only when the config happened to set the same token. Keeping one
+	// specificity means the normal "later wins" rule holds everywhere.
 	writeBlock(":root", light)
 	writeBlock(":root", cardShadow)
-	// Dark colours first, then the shadow preset: within the dark selector
-	// nothing overlaps, but keeping the preset last mirrors the light order.
-	writeBlock(`:root[data-theme="dark"]`, dark)
-	writeBlock(`:root[data-theme="dark"]`, darkShadow)
+	writeBlock(":root", dark)
+}
+
+// darkName is the custom property a dark value is parked on. The built-in
+// stylesheet resolves --x under [data-theme="dark"] as var(--dark-x, <built-in
+// dark value>), which is what keeps a colour set for the light theme from
+// standing in for the dark one.
+func darkName(prop string) string {
+	return "--dark-" + strings.TrimPrefix(prop, "--")
 }
 
 // handleEvents streams changes to the browser over SSE. The browser therefore

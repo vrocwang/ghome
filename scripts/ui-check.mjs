@@ -359,7 +359,11 @@ try {
         const h = hex[1].length === 3 ? hex[1].replace(/./g, (c) => c + c) : hex[1];
         parts = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
       } else {
-        const nums = text.match(/[\d.]+/g);
+        // [0-9] rather than \d: this whole probe is a template literal, and a
+        // backslash-d inside one is not an escape at all -- the backslash is
+        // dropped before the browser ever parses the regex, so \d silently
+        // becomes "d" and an rgb() colour fails to parse.
+        const nums = text.match(/[0-9.]+/g);
         if (nums && nums.length >= 3) parts = nums.slice(0, 3).map(Number);
       }
       if (!parts) return null;
@@ -369,18 +373,26 @@ try {
       });
       return 0.2126 * r + 0.7152 * g + 0.0722 * b;
     };
-    // body's background is a gradient (accent glow over --bg), so
-    // backgroundColor is transparent. The tokens are what it is painted from.
+    // Measure the text where it actually sits: link names are painted on the
+    // card (--surface), not on the page background. Comparing --text against
+    // --bg instead passed a config whose cards were #777777 on #808080.
     const cs = getComputedStyle(document.documentElement);
-    const fg = lum(cs.getPropertyValue('--text'));
-    const bg = lum(cs.getPropertyValue('--bg'));
-    const ratio = (fg === null || bg === null) ? 0
-      : Math.round((((Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05))) * 100) / 100;
+    const card = document.querySelector('.group') || document.body;
+    const cardCS = getComputedStyle(card);
+    const ratioOf = (a, b) => {
+      const [x, y] = [lum(a), lum(b)];
+      if (x === null || y === null) return 0;
+      return Math.round(((Math.max(x, y) + 0.05) / (Math.min(x, y) + 0.05)) * 100) / 100;
+    };
+    const name = document.querySelector('.link .nm') || document.querySelector('.link');
+    const nameCS = name ? getComputedStyle(name) : null;
     return {
       theme: document.documentElement.getAttribute('data-theme'),
-      tokens: cs.getPropertyValue('--bg').trim() + ' / ' + cs.getPropertyValue('--text').trim(),
       bg: cs.getPropertyValue('--bg').trim(),
-      ratio,
+      // On the card, which is what a link name is read against...
+      ratio: nameCS ? ratioOf(nameCS.color, cardCS.backgroundColor) : 0,
+      // ...and on the page, which is what the rest of the chrome sits on.
+      pageRatio: ratioOf(cardCS.color, cs.getPropertyValue('--bg')),
     };
   })()`;
 
@@ -403,8 +415,8 @@ try {
   check('dark mode repaints the page, not just the attribute',
     lightPaint.bg !== darkPaint.bg,
     `--bg stayed ${lightPaint.bg}; a style: block is feeding light colours to the dark theme`);
-  check('both themes are readable', lightPaint.ratio >= 4.5 && darkPaint.ratio >= 4.5,
-    `light ${lightPaint.ratio}:1, dark ${darkPaint.ratio}:1`);
+  check('both themes are readable on the cards', lightPaint.ratio >= 4.5 && darkPaint.ratio >= 4.5,
+    `light ${lightPaint.ratio}:1, dark ${darkPaint.ratio}:1 (page ${lightPaint.pageRatio}:1 / ${darkPaint.pageRatio}:1)`);
 
   /* ---------- verdict ---------- */
 

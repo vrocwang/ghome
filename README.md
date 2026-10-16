@@ -215,7 +215,7 @@ style:
   width: 1280             # 内容最大宽度
   iconSize: 22            # 图标尺寸
   density: compact        # comfortable | compact
-  cardStyle: strong       # soft | flat | strong，两个主题各自生效
+  cardStyle: strong       # soft | flat | strong（卡片阴影两个主题共用同一套，custom.css 可覆盖）
 ```
 
 上面这些颜色只作用于**浅色主题**。深色主题有自己的内置配色，需要的话用 `style.dark` 单独覆盖。
@@ -231,7 +231,8 @@ style:
 ```
 
 `dark:` 里没写的颜色**继续用内置深色值**，而不是回落到上面那些浅色值——否则切换主题时页面几乎不变，
-看起来就像主题开关坏了。
+看起来就像主题开关坏了。卡片阴影（`cardStyle`）是个例外：它只有一套值，两个主题共用——这样 `flat`
+在深色下也真的是平的，而且你在 `custom.css` 里改的阴影不会被深色块吃掉。
 
 这些令牌由 `/theme.css` 以 CSS 变量发给浏览器，页面所有颜色、间距、圆角都从它们派生，所以改一个
 `accent` 整页都跟着变，**包括已经开着的页面**。颜色只接受 `#hex` / `rgb()` / `hsl()` / 颜色关键字，
@@ -344,7 +345,7 @@ ghome --icon-dir=/var/lib/ghome/icons
 | `--cache-file` | `GHOME_CACHE_FILE` | | 持久化最后一份可用配置（含仓库里的 `custom.css`），重启时 forge 不可达也能服务 |
 | `--web-dir` | `GHOME_WEB_DIR` | | 从目录提供 UI，逐文件回退到内嵌副本 |
 | `--icon-dir` | `GHOME_ICON_DIR` | | 本地图标目录，优先于联网抓取 |
-| `--icon-fetch` | `GHOME_ICON_FETCH` | `auto` | `off` 时服务端**完全不联网抓图标**；没有本地文件的链接回退到自动生成的首字母头像 |
+| `--icon-fetch` | `GHOME_ICON_FETCH` | `auto` | `off`（或 `none`）时服务端**完全不联网抓图标**；没有本地文件的链接回退到自动生成的首字母头像 |
 | `--dump-web` | | | 把内嵌前端导出到目录后退出（`--web-dir` 的起点） |
 | `--healthcheck` | | | 请求自己的 `/healthz`，200 退出 0；给容器健康检查用 |
 | `--version` | | | 打印版本后退出 |
