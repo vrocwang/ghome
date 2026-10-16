@@ -510,10 +510,14 @@ func (s *Server) handleThemeCSS(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-cache")
 
 	var b strings.Builder
-	if payload, ok := s.store.Get(); ok {
+	// Both halves come from one read: fetching the document and the stylesheet
+	// separately can pair one revision's tokens with the next revision's
+	// custom.css, which is the one thing publishing them together prevents.
+	payload, css, rev, ok := s.store.GetWithCSS()
+	if ok {
 		writeThemeTokens(&b, payload.Style)
 	}
-	if css, rev, ok := s.store.CSS(); ok && len(css) > 0 {
+	if len(css) > 0 {
 		fmt.Fprintf(&b, "\n/* %s */\n", "custom.css @ "+rev)
 		b.Write(css)
 		if !strings.HasSuffix(strings.TrimSpace(string(css)), "}") {
@@ -719,16 +723,27 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 	updates, cancel := s.store.Subscribe()
 	defer cancel()
 
-	// Hand the client the revision it should already have, so a page that
-	// loaded during a refresh can catch up without waiting for the next push.
+	// Hand the client the revision it should already have, plus the store's
+	// notification counter, so a page that loaded during a refresh -- or that
+	// was disconnected while one happened -- can catch up without waiting for
+	// the next push.
+	//
+	// The counter is what makes that complete. The document revision only moves
+	// for a nav.yaml edit; a push that touched only custom.css moves
+	// themeRevision, and a probe round moves neither. A client comparing only
+	// the revision would sit on a stale stylesheet or stale status lights until
+	// something unrelated happened.
 	if payload, ok := s.store.Get(); ok {
-		writeSSE(w, "hello", payload.Meta.Revision, fmt.Sprintf(`{"revision":%q}`, payload.Meta.Revision))
+		writeSSE(w, "hello", payload.Meta.Revision, helloBody(payload.Meta.Revision, s.store.Changes()))
 	} else {
-		writeSSE(w, "hello", "", `{"revision":""}`)
+		writeSSE(w, "hello", "", helloBody("", s.store.Changes()))
 	}
 	flusher.Flush()
 
 	// Comment frames keep proxies and NATs from dropping an idle connection.
+	// They are also the only liveness signal the client can see, so they are
+	// sent as a named event: EventSource never surfaces a comment to JavaScript,
+	// which would leave a blackholed connection looking healthy forever.
 	heartbeat := time.NewTicker(25 * time.Second)
 	defer heartbeat.Stop()
 
@@ -746,13 +761,19 @@ func (s *Server) handleEvents(w http.ResponseWriter, r *http.Request) {
 			if payload, ok := s.store.Get(); ok {
 				rev = payload.Meta.Revision
 			}
-			writeSSE(w, "changed", rev, "{}")
+			writeSSE(w, "changed", rev, helloBody(rev, s.store.Changes()))
 			flusher.Flush()
 		case <-heartbeat.C:
-			_, _ = fmt.Fprint(w, ": ping\n\n")
+			writeSSE(w, "ping", "", "{}")
 			flusher.Flush()
 		}
 	}
+}
+
+// helloBody is the state frame both hello and changed carry. changes lets the
+// client tell "I missed nothing" from "something happened while I was away".
+func helloBody(revision string, changes int64) string {
+	return fmt.Sprintf(`{"revision":%q,"changes":%d}`, revision, changes)
 }
 
 // writeSSE emits one event, stripping newlines that would break the framing.

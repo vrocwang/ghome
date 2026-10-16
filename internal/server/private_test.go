@@ -3,9 +3,11 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -393,6 +395,168 @@ func TestVerifierStaysBounded(t *testing.T) {
 	}
 }
 
+// Filling the cache must not throw away the verdicts of viewers who are still
+// using them. Emptying the map made a burst of wrong tokens a way to force a
+// fresh forge check for everyone, which is the opposite of what the cache is
+// for -- and during a forge hiccup it turned a standing "ok" into "unavailable".
+func TestVerifierEvictionKeepsLiveVerdicts(t *testing.T) {
+	var goodCalls atomic.Int64
+	now := time.Now()
+	v := newVerifier(func(_ context.Context, token string) source.Access {
+		if token == goodToken {
+			goodCalls.Add(1)
+			return source.AccessOK
+		}
+		return source.AccessRejected
+	})
+	v.now = func() time.Time { return now }
+
+	// Fill the cache first, then let the good token in: it takes the latest
+	// expiry, so eviction has the older wrong tokens to give up before it.
+	for i := 0; i < verifyMaxEntries; i++ {
+		now = now.Add(time.Millisecond)
+		v.allowed(context.Background(), fmt.Sprintf("junk-%d", i))
+	}
+	now = now.Add(time.Millisecond)
+	if got := v.allowed(context.Background(), goodToken); got != source.AccessOK {
+		t.Fatalf("a good token got %q, want ok", got)
+	}
+
+	// The flood continues, but never far enough to outlive the good verdict.
+	for i := 0; i < verifyMaxEntries/2; i++ {
+		now = now.Add(time.Millisecond)
+		v.allowed(context.Background(), fmt.Sprintf("flood-%d", i))
+	}
+
+	if got := v.allowed(context.Background(), goodToken); got != source.AccessOK {
+		t.Fatalf("the good verdict was lost, token now reads %q", got)
+	}
+	if got := goodCalls.Load(); got != 1 {
+		t.Errorf("the good token was checked %d times, want 1: a flood evicted it", got)
+	}
+	v.mu.Lock()
+	size := len(v.seen)
+	v.mu.Unlock()
+	if size > verifyMaxEntries {
+		t.Errorf("cache grew to %d entries, want at most %d", size, verifyMaxEntries)
+	}
+}
+
+// A burst of requests carrying the same unseen token is one question to the
+// forge, not one per request. The cache cannot do this on its own: it only holds
+// a verdict once a check has finished, so every request in the burst misses it.
+func TestVerifierCollapsesConcurrentChecksOfTheSameToken(t *testing.T) {
+	var mu sync.Mutex
+	var calls, cur int
+	release := make(chan struct{})
+	v := newVerifier(func(ctx context.Context, _ string) source.Access {
+		mu.Lock()
+		calls++
+		cur++
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		mu.Lock()
+		cur--
+		mu.Unlock()
+		return source.AccessOK
+	})
+
+	const callers = 20
+	results := make([]source.Access, callers)
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			results[i] = v.allowed(context.Background(), goodToken)
+		}(i)
+	}
+
+	// Let the leader reach the forge call and everyone else pile up behind it.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		started := calls == 1 && cur == 1
+		mu.Unlock()
+		if started {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	time.Sleep(50 * time.Millisecond) // the rest of the burst arrives
+	close(release)
+	wg.Wait()
+
+	mu.Lock()
+	got := calls
+	mu.Unlock()
+	if got != 1 {
+		t.Errorf("%d callers caused %d forge checks, want 1", callers, got)
+	}
+	for i, access := range results {
+		if access != source.AccessOK {
+			t.Errorf("caller %d got %q, want ok: a waiter must see the leader's verdict", i, access)
+		}
+	}
+}
+
+// The bound is what stops an unauthenticated caller deciding how many requests
+// ghome makes to the forge at once.
+func TestVerifierBoundsConcurrentChecks(t *testing.T) {
+	var mu sync.Mutex
+	var cur, peak int
+	release := make(chan struct{})
+	v := newVerifier(func(ctx context.Context, _ string) source.Access {
+		mu.Lock()
+		cur++
+		if cur > peak {
+			peak = cur
+		}
+		mu.Unlock()
+		select {
+		case <-release:
+		case <-ctx.Done():
+		}
+		mu.Lock()
+		cur--
+		mu.Unlock()
+		return source.AccessRejected
+	})
+
+	const callers = verifyMaxInflight * 5
+	var wg sync.WaitGroup
+	for i := 0; i < callers; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			v.allowed(context.Background(), fmt.Sprintf("tok-%d", i))
+		}(i)
+	}
+
+	// The bound has to actually be reached, or the assertion proves nothing.
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		mu.Lock()
+		got := peak
+		mu.Unlock()
+		if got >= verifyMaxInflight {
+			break
+		}
+		time.Sleep(2 * time.Millisecond)
+	}
+	mu.Lock()
+	got := peak
+	mu.Unlock()
+	if got != verifyMaxInflight {
+		t.Errorf("concurrent checks reached %d, want exactly the bound %d", got, verifyMaxInflight)
+	}
+	close(release)
+	wg.Wait()
+}
+
 func TestNilVerifierRefusesEverything(t *testing.T) {
 	var v *verifier
 	if got := v.allowed(context.Background(), goodToken); got == source.AccessOK {
@@ -624,6 +788,43 @@ groups:
 		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
 		if body := rec.Body.String(); strings.Contains(body, "财务系统") {
 			t.Errorf("%s (%d) leaks the entry name:\n%s", path, rec.Code, body)
+		}
+	}
+}
+
+// A type error is a different path out of the parser than a missing url: yaml
+// builds the message itself and quotes the offending scalar in backticks, which
+// is how a private entry's name ended up in the 503 body of /api/nav and in
+// /healthz. Both answer without a token, so the value has to be dropped even
+// though the message is not ours.
+func TestYAMLTypeErrorsDoNotEchoTheOffendingValue(t *testing.T) {
+	const secret = "日记入口"
+
+	st := store.New()
+	loadErr := st.Load([]byte(`
+groups:
+  - name: public
+    links:
+      - {name: a, url: "https://a.example.com"}
+  - name: secret
+    private: true
+    links:
+      - {name: `+secret+`, url: "https://diary.example.com", tags: `+secret+`}
+`), "rev-1", "test")
+	if loadErr == nil {
+		t.Fatal("a scalar where a list belongs was accepted")
+	}
+	// The author still has to be able to find the mistake.
+	if !strings.Contains(loadErr.Error(), "line ") || !strings.Contains(loadErr.Error(), "[]string") {
+		t.Errorf("error = %v, want it to keep the line and the expected type", loadErr)
+	}
+
+	srv, _ := newTestServer(t, Options{Store: st})
+	for _, path := range []string{"/healthz", "/api/nav"} {
+		rec := httptest.NewRecorder()
+		srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+		if body := rec.Body.String(); strings.Contains(body, secret) {
+			t.Errorf("%s (%d) leaks the offending value:\n%s", path, rec.Code, body)
 		}
 	}
 }

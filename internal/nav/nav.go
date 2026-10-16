@@ -454,7 +454,7 @@ func Parse(data []byte) (*Config, []string, error) {
 	// struct at the first unknown key.
 	var c Config
 	if err := node.Decode(&c); err != nil {
-		return nil, warnings, fmt.Errorf("invalid yaml: %w", err)
+		return nil, warnings, fmt.Errorf("invalid yaml: %s", redactYAMLValue(err.Error()))
 	}
 
 	normalizeWarnings, err := c.normalize()
@@ -475,7 +475,7 @@ func Parse(data []byte) (*Config, []string, error) {
 func decodeNode(data []byte) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
-		return nil, fmt.Errorf("invalid yaml: %w", err)
+		return nil, fmt.Errorf("invalid yaml: %s", redactYAMLValue(err.Error()))
 	}
 	if doc.Kind == 0 {
 		// An empty document parses to a zero node; hand the later passes
@@ -567,20 +567,22 @@ func collectUnknownFields(data []byte) ([]string, error) {
 
 	var typeErr *yaml.TypeError
 	if !errors.As(err, &typeErr) {
-		return nil, fmt.Errorf("invalid yaml: %w", err)
+		return nil, fmt.Errorf("invalid yaml: %s", redactYAMLValue(err.Error()))
 	}
 
 	var warnings, fatal []string
 	for _, msg := range typeErr.Errors {
 		switch {
 		case isUnknownField(msg):
+			// The key is echoed here, not a value. Keys are schema field names,
+			// so nothing an author wrote under `name:` or `url:` can appear.
 			warnings = append(warnings, "ignored unknown field ("+msg+")")
 		case strings.Contains(msg, "into bool"):
 			// checkBools already refused this one by field and line. yaml's
 			// wording is dropped rather than repeated: it quotes the value, and
 			// this text is served by /healthz and by the 503 body of /api/nav.
 		default:
-			fatal = append(fatal, msg)
+			fatal = append(fatal, redactYAMLValue(msg))
 		}
 	}
 	if len(fatal) > 0 {
@@ -591,6 +593,34 @@ func collectUnknownFields(data []byte) ([]string, error) {
 
 func isUnknownField(msg string) bool {
 	return strings.Contains(msg, "not found in type")
+}
+
+// redactYAMLValue removes the scalar yaml.v3 quotes in its error messages, as in
+//
+//	cannot unmarshal !!str `日记` into []string
+//
+// That scalar is a value the author wrote in nav.yaml -- an entry's name, or a
+// url that may carry a token. This text is served by the unauthenticated
+// /healthz and by the 503 body of /api/nav, so repeating it would hand out
+// exactly what the private tier exists to withhold. The line number and the
+// expected type are what the author needs to find the mistake; the value is not.
+//
+// Only the backquoted span is dropped, so the fix is stated by the position it
+// sits in: "line 8: cannot unmarshal !!str <value> into []string".
+func redactYAMLValue(msg string) string {
+	for {
+		start := strings.IndexByte(msg, '`')
+		if start < 0 {
+			return msg
+		}
+		end := strings.IndexByte(msg[start+1:], '`')
+		if end < 0 {
+			// An unterminated quote: nothing after it can be trusted to be free
+			// of the value, so drop the rest rather than guess where it ends.
+			return msg[:start] + "<value>"
+		}
+		msg = msg[:start] + "<value>" + msg[start+end+2:]
+	}
 }
 
 // problems accumulates every validation error so one push reports all of them

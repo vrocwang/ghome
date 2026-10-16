@@ -127,3 +127,36 @@ func TestSlowSubscriberNeverBlocks(t *testing.T) {
 		t.Fatal("Load() blocked on a subscriber that never reads")
 	}
 }
+
+// A reconnecting stream asks for this counter to find out whether it missed
+// anything. It has to move for every kind of notification, not just a new
+// document: a probe round publishes nothing at all, and a stylesheet-only push
+// leaves the document revision alone.
+func TestChangesCountsEveryNotification(t *testing.T) {
+	st := New()
+	if got := st.Changes(); got != 0 {
+		t.Errorf("Changes() = %d on a fresh store, want 0", got)
+	}
+
+	if err := st.Load([]byte(goodDoc), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	afterLoad := st.Changes()
+	if afterLoad == 0 {
+		t.Fatal("a publish did not move the counter, so a reconnect could never catch up")
+	}
+
+	st.Notify() // what the prober does when a result changes
+	if got := st.Changes(); got != afterLoad+1 {
+		t.Errorf("Changes() = %d after Notify, want %d", got, afterLoad+1)
+	}
+
+	// Two publishes of the same revision still count: the counter says how many
+	// times subscribers were woken, not whether the bytes differ.
+	if err := st.Load([]byte(goodDoc), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	if got := st.Changes(); got != afterLoad+2 {
+		t.Errorf("Changes() = %d after a second publish, want %d", got, afterLoad+2)
+	}
+}

@@ -8,6 +8,7 @@
   var POLL_INTERVAL = 60000;   // safety net when SSE is unavailable
   var RECONNECT_DELAY = 5000;  // after the SSE connection is closed
   var STALE_AFTER = 20000;     // refresh on tab focus if older than this
+  var HEARTBEAT_TIMEOUT = 70000; // two server heartbeats (25s) plus slack
   var HUE_COUNT = 10;
   var MAX_BANNER_ITEMS = 4;
 
@@ -71,9 +72,15 @@
     // be dropped instead of dragging the page back to a stale revision.
     loadSeq: 0,
     lastFetch: 0,
+    // The last notification counter this page has acted on. The server sends it
+    // with every frame, and comparing it on reconnect is the only way to notice
+    // a change that moved neither of the two revisions we hold: a stylesheet
+    // only push moves themeRevision, a probe round moves nothing.
+    serverChanges: null,
     pollTimer: null,
     source: null,
     reconnectTimer: null,
+    watchdogTimer: null,
     toastTimer: null
   };
 
@@ -353,6 +360,18 @@
       if (!value) return;
 
       setStoredToken(value);
+      // The request reads the token back out of sessionStorage, so a browser
+      // that refuses to keep it (private mode, storage disabled) would send no
+      // token at all -- and the server answers "rejected" when there was
+      // nothing to ask about, so the viewer is told their token is bad when it
+      // was never sent. Say what actually happened instead.
+      if (storedToken() !== value) {
+        els.unlockToken.value = value;
+        els.unlockForm.hidden = false;
+        els.unlockToken.focus();
+        toast('这个浏览器不允许保存令牌，无法解锁私密链接');
+        return;
+      }
       els.unlockToken.value = '';
       var answered = await reloadView();
 
@@ -882,6 +901,19 @@
     }
 
     state.config = fetchedConfig;
+
+    // A background load can be the first to learn that the token is no longer
+    // accepted: the server's cached verdict expires after five minutes, or the
+    // token was revoked. The DOM re-locks by itself, because the payload is
+    // filtered -- but the dead token would otherwise stay in sessionStorage and
+    // keep being sent, and the previous unlocked probe results would keep
+    // feeding the health pill. Only the unlock form used to act on this.
+    var revoked = state.config.private;
+    if (revoked && revoked.locked && revoked.check === 'rejected' && storedToken()) {
+      setStoredToken('');
+      if (options.notify) toast('令牌已失效，私密链接重新隐藏');
+    }
+
     if (fetchedStatus) state.status = fetchedStatus;
 
     var meta = state.config.meta || {};
@@ -955,6 +987,38 @@
     }, RECONNECT_DELAY);
   }
 
+  // A connection can die without saying so: a NAT or proxy that drops the state
+  // table leaves the socket open and raises no error event, so EventSource keeps
+  // reporting OPEN while nothing arrives. The server sends a named ping every
+  // 25s precisely because a comment frame is invisible to JavaScript -- this
+  // timer is what turns that into "the stream is dead, fall back to polling and
+  // reconnect".
+  function armWatchdog() {
+    clearTimeout(state.watchdogTimer);
+    state.watchdogTimer = setTimeout(function () {
+      state.watchdogTimer = null;
+      startPolling();
+      scheduleReconnect();
+    }, HEARTBEAT_TIMEOUT);
+  }
+
+  function disarmWatchdog() {
+    clearTimeout(state.watchdogTimer);
+    state.watchdogTimer = null;
+  }
+
+  // frameChanges reads the notification counter every server frame carries. A
+  // frame we cannot read is treated as "unknown", which the caller answers with
+  // a re-read rather than with silence.
+  function frameChanges(event) {
+    try {
+      var payload = JSON.parse(event.data);
+      return typeof payload.changes === 'number' ? payload.changes : null;
+    } catch (err) {
+      return null;
+    }
+  }
+
   function connect() {
     // Start the safety net now, and stop it only once a stream is actually
     // established. Waiting for the stream to fail first is not enough: a
@@ -971,30 +1035,38 @@
 
     es.addEventListener('open', function () {
       stopPolling();
+      armWatchdog();
     });
 
-    // The server tells us which revision it is on, so a page that loaded in
-    // the middle of a refresh can catch up.
+    // The server tells us whether anything happened that this page has not
+    // acted on yet, so a page that loaded in the middle of a refresh -- or that
+    // was not listening while one landed -- catches up without waiting for the
+    // next push.
     es.addEventListener('hello', function (event) {
-      try {
-        var payload = JSON.parse(event.data);
-        var current = state.config && state.config.meta && state.config.meta.revision;
-        if (payload.revision && payload.revision !== current) {
-          load({ silent: true });
-        }
-      } catch (err) { /* ignore malformed frames */ }
+      armWatchdog();
+      var changes = frameChanges(event);
+      if (changes === null || changes !== state.serverChanges) {
+        state.serverChanges = changes;
+        load({ silent: true });
+      }
     });
 
     // One event type means "re-read": config and probe results both live
     // behind it, so a dropped notification cannot leave one of them stale.
-    es.addEventListener('changed', function () {
+    es.addEventListener('changed', function (event) {
+      armWatchdog();
+      var changes = frameChanges(event);
+      if (changes !== null) state.serverChanges = changes;
       load({ silent: true, notify: true });
     });
+
+    es.addEventListener('ping', armWatchdog);
 
     es.addEventListener('error', function () {
       // startPolling is a no-op while a timer is already running, which is what
       // keeps a failing reconnect from pushing the next poll a further minute
       // away every five seconds.
+      disarmWatchdog();
       startPolling();
       if (es.readyState === 2) { // CLOSED: the browser will not retry for us
         scheduleReconnect();

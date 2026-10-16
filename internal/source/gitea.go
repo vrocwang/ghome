@@ -211,8 +211,11 @@ func (g *Gitea) CheckRead(ctx context.Context, token string) Access {
 	}()
 
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode >= 500 {
-			// The forge failed rather than judged.
+		if retryableStatus(resp.StatusCode) {
+			// The forge failed, or refused to answer right now, rather than
+			// judged this token. A rate limit that was reported as "rejected"
+			// made the browser delete a perfectly good token, and remembered the
+			// refusal for the whole failure TTL.
 			return AccessUnavailable
 		}
 		return AccessRejected
@@ -230,6 +233,23 @@ func (g *Gitea) CheckRead(ctx context.Context, token string) Access {
 		return AccessRejected
 	}
 	return AccessOK
+}
+
+// retryableStatus reports whether a non-200 from the repository endpoint means
+// "the forge could not answer" rather than "this token is not allowed".
+//
+// 5xx is the forge failing. 408 and 429 are the forge declining to answer right
+// now -- a rate limit is a fact about the moment, not about the token, and
+// treating it as a verdict both deletes the viewer's token in the browser and
+// pins the refusal for the whole failure TTL.
+func retryableStatus(code int) bool {
+	switch {
+	case code >= 500:
+		return true
+	case code == http.StatusRequestTimeout, code == http.StatusTooManyRequests:
+		return true
+	}
+	return false
 }
 
 func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {

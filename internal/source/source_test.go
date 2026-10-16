@@ -396,8 +396,10 @@ func TestCheckReadIsStrict(t *testing.T) {
 		case "empty":
 			// A 200 with no body.
 		case "redirect":
-			// An SSO or proxy front end answering with a redirect to a page
-			// that returns 200.
+			// An SSO or proxy front end answering with a redirect. The target
+			// returns a perfectly valid 200 for this repository, so the check
+			// only holds if the redirect was not followed: a following client
+			// would read that body and unlock.
 			http.Redirect(w, r, "/login", http.StatusFound)
 			return
 		default:
@@ -405,7 +407,7 @@ func TestCheckReadIsStrict(t *testing.T) {
 		}
 	})
 	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.WriteString(w, `<html><body>sign in</body></html>`)
+		_, _ = io.WriteString(w, `{"full_name":"acme/nav"}`)
 	})
 	srv := httptest.NewServer(mux)
 	defer srv.Close()
@@ -451,6 +453,10 @@ func TestCheckReadSeparatesRefusalFromOutage(t *testing.T) {
 			w.WriteHeader(http.StatusNotFound)
 		case "broken":
 			w.WriteHeader(http.StatusBadGateway)
+		case "throttled":
+			w.WriteHeader(http.StatusTooManyRequests)
+		case "slow":
+			w.WriteHeader(http.StatusRequestTimeout)
 		default:
 			w.WriteHeader(http.StatusUnauthorized)
 		}
@@ -472,6 +478,12 @@ func TestCheckReadSeparatesRefusalFromOutage(t *testing.T) {
 		"wrong":     AccessRejected,
 		"":          AccessRejected,
 		"broken":    AccessUnavailable, // 5xx: the forge failed, it did not judge
+		// A rate limit, or a request the forge declined to read, is a fact about
+		// the moment rather than about the token. Reporting it as a refusal made
+		// the browser delete a good token and pinned the refusal for five
+		// minutes.
+		"throttled": AccessUnavailable,
+		"slow":      AccessUnavailable,
 	}
 	for token, expected := range want {
 		if got := src.CheckRead(context.Background(), token); got != expected {

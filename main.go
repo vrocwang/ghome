@@ -154,9 +154,16 @@ func run() error {
 
 	watch := watcher.New(src, st, o.poll, log)
 	watch.OnUpdate = func(cfg *nav.Config) {
+		// Derived state first. The watcher publishes before it calls this hook,
+		// so a subscriber that reacts immediately can already be asking for the
+		// icon of a host only the new config mentions -- and until the icon
+		// allow-list is replaced that answer is a 404, which the browser latches
+		// as a letter avatar for the life of the revision. The cache write is
+		// disk I/O, so it goes last; it reads the payload that was just
+		// published rather than the outgoing one.
+		applyConfig(cfg)
 		css, _, _ := st.CSS()
 		saveCache(o.cacheFile, st.Raw(), css, log)
-		applyConfig(cfg)
 	}
 
 	// A config restored from the cache never passed through OnUpdate, so its

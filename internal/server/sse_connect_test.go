@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -106,4 +107,45 @@ func TestEventStreamDoesNotLoseAnUpdateDuringConnect(t *testing.T) {
 	cancel()
 	<-done
 	t.Errorf("stream never carried a changed event; body was:\n%s", w.body())
+}
+
+// The stream's first frame has to say whether anything happened that this client
+// has not seen. The document revision cannot say it: a push that touched only
+// custom.css moves themeRevision, and a probe round moves neither. A client
+// comparing revisions alone keeps a stale stylesheet or stale status lights
+// until something unrelated happens, and its fallback poll is already stopped.
+func TestEventStreamHelloCarriesTheNotificationCounter(t *testing.T) {
+	st := testStore(t)
+	srv, _ := newTestServer(t, Options{Store: st})
+
+	want := st.Changes() + 1
+	st.Notify() // the prober's path: no document change at all
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/api/events", nil).WithContext(ctx)
+
+	w := newBlockingFlusher()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		srv.handleEvents(w, req)
+	}()
+
+	select {
+	case <-w.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("the handler never reached its first flush")
+	}
+	body := w.body()
+	close(w.release)
+	cancel()
+	<-done
+
+	if !strings.Contains(body, "event: hello") {
+		t.Fatalf("no hello frame:\n%s", body)
+	}
+	if marker := fmt.Sprintf(`"changes":%d`, want); !strings.Contains(body, marker) {
+		t.Errorf("hello = %q, want it to carry %s", body, marker)
+	}
 }

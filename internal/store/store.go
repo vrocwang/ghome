@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
@@ -28,6 +29,12 @@ type Store struct {
 	subsMu sync.Mutex
 	subs   map[int]chan struct{}
 	nextID int
+
+	// changes counts notifications. A client that reconnects asks for it and
+	// compares: "did anything happen while I was not listening?" is otherwise
+	// unanswerable, because a change to custom.css alone leaves the document
+	// revision alone and a probe round leaves both alone.
+	changes atomic.Int64
 
 	now func() time.Time
 }
@@ -126,6 +133,19 @@ func (s *Store) Loaded() bool {
 	return s.loaded
 }
 
+// GetWithCSS returns the document and its stylesheet from one revision, under a
+// single lock.
+//
+// Reading them with Get and CSS in turn can mix them: a publish between the two
+// calls hands out one revision's tokens next to the next revision's stylesheet.
+// The document and the stylesheet are installed together, so they have to be
+// read together.
+func (s *Store) GetWithCSS() (nav.Payload, []byte, string, bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.payload, s.css, s.cssRev, s.loaded
+}
+
 // LastError returns the most recent fetch or parse failure, if any.
 func (s *Store) LastError() error {
 	s.mu.RLock()
@@ -171,7 +191,16 @@ func (s *Store) Subscribe() (<-chan struct{}, func()) {
 // prober uses it to push fresh probe results over the same event stream.
 func (s *Store) Notify() { s.notify() }
 
+// Changes counts the notifications broadcast so far. It is what a reconnecting
+// event stream compares to decide whether it has to re-read: the document
+// revision only moves for a nav.yaml edit, so a stylesheet-only push or a probe
+// result that flipped while nobody was listening would otherwise be missed
+// forever.
+func (s *Store) Changes() int64 { return s.changes.Load() }
+
 func (s *Store) notify() {
+	s.changes.Add(1)
+
 	s.subsMu.Lock()
 	defer s.subsMu.Unlock()
 	for _, ch := range s.subs {
