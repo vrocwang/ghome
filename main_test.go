@@ -547,17 +547,27 @@ func TestProberIsGivenItsTargetsBeforeItsFirstRound(t *testing.T) {
 // The cache exists so a restart during a forge outage still serves a usable
 // page. Caching nav.yaml alone brought the page back without the repository
 // stylesheet, and the theme revision gave the browser no reason to re-fetch.
+//
+// The name matters as much as the content here: it is the one thing an operator
+// sees in the data directory, and it has to describe itself.
 func TestCacheRoundTripKeepsTheStylesheet(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "cache.yaml")
 	raw := []byte("style:\n  customCss: \"custom.css\"\n" + minimalNav)
 	css := []byte(".link{color:red}\n")
 
+	if got, want := cacheCSSPath(path), filepath.Join(dir, "cache.theme.css"); got != want {
+		t.Errorf("cacheCSSPath(%q) = %q, want %q", path, got, want)
+	}
+
 	live := store.New()
 	if err := live.LoadCache(raw, "rev-1", "test", css, "css-rev"); err != nil {
 		t.Fatalf("LoadCache() error = %v", err)
 	}
 	saveCache(path, raw, css, discardLogger())
+	if _, err := os.Stat(filepath.Join(dir, "cache.theme.css")); err != nil {
+		t.Errorf("the stylesheet was not cached under the derived name: %v", err)
+	}
 
 	restored := store.New()
 	loadCache(path, restored, discardLogger())

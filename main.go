@@ -598,10 +598,25 @@ func loadCache(path string, st *store.Store, log *slog.Logger) {
 		"path", path, "cached_css", len(css) > 0)
 }
 
+// cacheCSSSuffix is the extension of the stylesheet cached next to the config,
+// and configExt is the extension dropped to make room for it. The stylesheet is
+// the cache path with its extension swapped: --cache-file=/data/cache.yaml
+// caches its stylesheet as /data/cache.theme.css.
+const (
+	configExt      = ".yaml"
+	cacheCSSSuffix = ".theme.css"
+)
+
+// cacheCSSPath names the cached stylesheet, so the writer and the reader cannot
+// disagree about it.
+func cacheCSSPath(cachePath string) string {
+	return strings.TrimSuffix(cachePath, configExt) + cacheCSSSuffix
+}
+
 // loadCachedCSS reads the stylesheet cached alongside the config. A missing file
 // is normal: most configs have no customCss at all.
 func loadCachedCSS(cachePath string) ([]byte, string) {
-	cssPath := cachePath + ".css"
+	cssPath := cacheCSSPath(cachePath)
 	data, err := os.ReadFile(cssPath)
 	if err != nil || len(data) == 0 {
 		return nil, ""
@@ -619,12 +634,12 @@ func saveCache(path string, data, css []byte, log *slog.Logger) {
 	}
 	writeAtomic(path, data, log)
 	if len(css) > 0 {
-		writeAtomic(path+".css", css, log)
+		writeAtomic(cacheCSSPath(path), css, log)
 		return
 	}
 	// The stylesheet is gone from the repository. Removing the cached copy is
 	// what keeps a restart from resurrecting it.
-	_ = os.Remove(path + ".css")
+	_ = os.Remove(cacheCSSPath(path))
 }
 
 func writeAtomic(path string, data []byte, log *slog.Logger) {

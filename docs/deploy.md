@@ -77,7 +77,8 @@ docker exec ghome /ghome --healthcheck       # 容器里查自己
 ### 卷
 
 `/data` 是给 `--cache-file` 的，挂上之后重启期间哪怕 forge 连不上也还能服务上一版页面——
-配置和仓库里的 `custom.css` 会一起从缓存恢复（写在 `cache.yaml` 旁边的 `cache.yaml.css`），
+配置和仓库里的 `custom.css` 会一起从缓存恢复（样式表就是缓存路径的扩展名换成
+`.theme.css`，所以 `/data/cache.yaml` 旁边是 `/data/cache.theme.css`），
 所以样式不会在这段时间里悄悄消失。
 
 `--web-dir` / `--icon-dir` 需要把宿主目录以只读挂进去
