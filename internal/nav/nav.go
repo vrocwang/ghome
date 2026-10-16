@@ -101,7 +101,10 @@ type Style struct {
 	// for the light theme says nothing about what it should look like in the
 	// dark -- reusing it is exactly what made switching themes look broken.
 	// Keys are the colour names above; anything else is reported and ignored.
-	Dark map[string]string `yaml:"dark" json:"dark,omitempty"`
+	//
+	// Not shipped to the browser, like the light colours: the client applies
+	// whatever /theme.css resolves and never reads a token value itself.
+	Dark map[string]string `yaml:"dark" json:"-"`
 
 	// CustomCSS names a file in the same repository, for example
 	// "custom.css". Its contents are appended to /theme.css, so a full

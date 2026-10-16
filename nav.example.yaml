@@ -36,7 +36,8 @@ style:
   muted: "#646c7a"        # 次要文字色
   border: "#e3e6ec"       # 描边色
   font: "Inter, system-ui, sans-serif"   # 字体栈（两个主题共用）
-  # 深色主题的颜色覆盖，只接受颜色键：accent / background / surface / text / muted / border。
+  # 深色主题的颜色覆盖。只接受颜色键（accent / background / surface / text / muted / border）；
+  # 几何、字体、间距两个主题共用，写在这里会被告警并忽略。
   # 默认注释掉：不写就完全用内置深色配色。
   # dark:
   #   accent: "#6f95ff"

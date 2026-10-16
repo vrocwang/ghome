@@ -16,6 +16,7 @@
 | 以为自己在跑 Gitea，其实是 Forgejo | `/api/v1/version` 报的 `16.0.5+gitea-1.22.0` 里，`+gitea-` 后是**兼容的 Gitea API 版本** | `curl 你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或日志里的 `config warning`（无鉴权的 `/healthz` 不带告警） |
 | 改了颜色但页面没变 | 多半是 ghome 还没察觉这次推送，其次才轮到浏览器缓存 | 看进程日志里的 `config warning`；`/theme.css` 末端会写明 custom.css 的版本哈希 |
+| 切换主题几乎没变化 | 旧版本把 `style:` 里的颜色同时发给浅色和深色，深色被浅色值盖掉 | 升级即可；想自定义深色用 `style.dark`，没写的键沿用内置深色值 |
 | 想改样式又不想装 Go | 不需要装 | 用 `style:` 令牌或 `custom.css`；要动结构才用 `--dump-web` + `--web-dir` |
 
 坏配置把页面卡住时，直接 `git revert` 那次提交即可，不需要重启服务。
