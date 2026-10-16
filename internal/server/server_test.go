@@ -194,6 +194,85 @@ func TestWebhookAcceptsTheLegacySHA1Signature(t *testing.T) {
 	}
 }
 
+// The endpoint is unauthenticated until the signature has been checked, so the
+// body cap is the only thing bounding what a caller can make the process
+// buffer. It has to be enforced by the reader, not by truncating a body whose
+// signature can then never match.
+func TestWebhookRefusesAnOversizedBody(t *testing.T) {
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
+
+	// A valid signature over a body that is too large: size has to be the
+	// reason for the refusal, not the signature.
+	body := strings.Repeat("a", maxWebhookBody+1)
+	rec := postWebhook(t, srv, body, map[string]string{
+		"X-Gitea-Event":     "push",
+		"X-Gitea-Signature": sign(t, body, "s3cret"),
+	})
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("status = %d, want 413 (body %s)", rec.Code, rec.Body)
+	}
+	if counter.n != 0 {
+		t.Errorf("an oversized body triggered a reload %d times", counter.n)
+	}
+}
+
+// A signed body that is not JSON is reachable: any proxy or a hand-wired hook
+// can produce one. It must be a 4xx, never a panic and never a reload.
+func TestWebhookRejectsASignedBodyThatIsNotJSON(t *testing.T) {
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
+
+	body := `<html>not a push payload</html>`
+	rec := postWebhook(t, srv, body, map[string]string{
+		"X-Gitea-Event":     "push",
+		"X-Gitea-Signature": sign(t, body, "s3cret"),
+	})
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
+	}
+	if counter.n != 0 {
+		t.Errorf("an unparseable body triggered a reload %d times", counter.n)
+	}
+}
+
+// /api/refresh accepts X-Ghome-Token so it still works behind a proxy that
+// claims the Authorization header for itself. That workaround is what
+// docs/basic-auth.md tells people to use against nginx Basic auth, so it is
+// pinned here -- a regression that dropped the header would silently break a
+// documented deployment.
+func TestRefreshAcceptsTheAlternativeTokenHeader(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{"bearer", map[string]string{"Authorization": "Bearer admin"}, http.StatusAccepted},
+		{"x-ghome-token", map[string]string{"X-Ghome-Token": "admin"}, http.StatusAccepted},
+		{"wrong x-ghome-token", map[string]string{"X-Ghome-Token": "nope"}, http.StatusUnauthorized},
+		{"nothing", nil, http.StatusUnauthorized},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, counter := newTestServer(t, Options{AdminToken: "admin"})
+			req := httptest.NewRequest(http.MethodPost, "/api/refresh", nil)
+			for k, v := range tc.headers {
+				req.Header.Set(k, v)
+			}
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, req)
+
+			if rec.Code != tc.want {
+				t.Errorf("status = %d, want %d", rec.Code, tc.want)
+			}
+			wantTriggers := 0
+			if tc.want == http.StatusAccepted {
+				wantTriggers = 1
+			}
+			if counter.n != wantTriggers {
+				t.Errorf("trigger ran %d times, want %d", counter.n, wantTriggers)
+			}
+		})
+	}
+}
+
 func TestNavEndpoint(t *testing.T) {
 	t.Run("serves the document once loaded", func(t *testing.T) {
 		srv, _ := newTestServer(t, Options{})
@@ -832,7 +911,10 @@ groups:
 	if len(state.Warnings) != 0 {
 		t.Errorf("warnings = %v, want none on an unauthenticated endpoint", state.Warnings)
 	}
-	if len(st.Warnings()) == 0 {
+	// The warning itself still has to exist somewhere: /api/nav carries it for
+	// an unlocked caller, and the watcher logs it.
+	payload, ok := st.Get()
+	if !ok || len(payload.Meta.Warnings) == 0 {
 		t.Error("the store lost the warnings: they are what the log line reports")
 	}
 }
@@ -1181,5 +1263,51 @@ func TestWebhookAnswersPingWithoutReloading(t *testing.T) {
 	}
 	if counter.n != 0 {
 		t.Errorf("a ping triggered %d reloads, want 0", counter.n)
+	}
+}
+
+// A 404 for a host that has no icon is as stable as a hit for one that does, and
+// the URL carries the revision, so it is cacheable for the same week. Without
+// this every page load re-asked for every icon-less host, which is exactly the
+// per-load churn the icon proxy exists to avoid.
+func TestIconMissIsCacheableForTheRevision(t *testing.T) {
+	st := store.New()
+	if err := st.Load([]byte(privateDoc), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+	srv, _ := newTestServer(t, Options{
+		Store: st,
+		Icons: &fakeIcons{ok: false},
+	})
+
+	// Unknown host: not in the config at all.
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/icon?h=unknown.example.com", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown host answered %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != iconCacheControl {
+		t.Errorf("unknown-host 404 Cache-Control = %q, want %q", got, iconCacheControl)
+	}
+
+	// Known host whose site has no resolvable icon.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/icon?h=a.example.com", nil))
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("icon-less host answered %d, want 404", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != iconCacheControl {
+		t.Errorf("icon-less 404 Cache-Control = %q, want %q", got, iconCacheControl)
+	}
+
+	// A request that is malformed is not the same answer for every caller, so it
+	// does not get the week.
+	rec = httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/api/icon", nil))
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing h answered %d, want 400", rec.Code)
+	}
+	if got := rec.Header().Get("Cache-Control"); got != "" {
+		t.Errorf("missing-h 400 Cache-Control = %q, want it absent", got)
 	}
 }

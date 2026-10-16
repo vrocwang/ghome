@@ -187,7 +187,6 @@ type Meta struct {
 	Source        string    `json:"source"`
 	GroupCount    int       `json:"groupCount"`
 	LinkCount     int       `json:"linkCount"`
-	PinnedCount   int       `json:"pinnedCount"`
 	Warnings      []string  `json:"warnings,omitempty"`
 }
 
@@ -208,6 +207,11 @@ type PrivateView struct {
 	Total int `json:"total"`
 	// Locked is true when they were withheld from this response.
 	Locked bool `json:"locked"`
+	// Check says why the tier is shut, when it is: "rejected" means the forge
+	// answered and refused this token, "unavailable" means the check could not
+	// be carried out. The client needs the difference, or a forge outage is
+	// reported to the viewer as a bad token -- and their good token is deleted.
+	Check string `json:"check,omitempty"`
 }
 
 // Duration is a time.Duration that reads and writes Go duration strings
@@ -256,19 +260,6 @@ func (c *Config) LinkCount() int {
 	n := 0
 	for _, g := range c.Groups {
 		n += len(g.Links)
-	}
-	return n
-}
-
-// PinnedCount totals the links marked pinned.
-func (c *Config) PinnedCount() int {
-	n := 0
-	for _, g := range c.Groups {
-		for _, l := range g.Links {
-			if l.Pinned {
-				n++
-			}
-		}
 	}
 	return n
 }
@@ -359,38 +350,6 @@ func hostKey(raw string) string {
 	return strings.ToLower(u.Hostname())
 }
 
-// PrivateOnlyHosts lists the hostnames that no public entry uses.
-//
-// Those are the ones an anonymous caller must not be able to probe for: the
-// icon endpoint answering for such a host would confirm the host is in the
-// config, which is the same disclosure that filtering /api/status avoids.
-func (c *Config) PrivateOnlyHosts() map[string]struct{} {
-	public := make(map[string]struct{}, len(c.Groups))
-	private := make(map[string]struct{}, len(c.Groups))
-
-	for _, g := range c.Groups {
-		for _, l := range g.Links {
-			host := hostKey(l.URL)
-			if host == "" {
-				continue
-			}
-			if g.Private || l.Private {
-				private[host] = struct{}{}
-				continue
-			}
-			public[host] = struct{}{}
-		}
-	}
-
-	out := make(map[string]struct{}, len(private))
-	for host := range private {
-		if _, shared := public[host]; !shared {
-			out[host] = struct{}{}
-		}
-	}
-	return out
-}
-
 // Public returns a copy with every private entry removed.
 //
 // A group left with no links is dropped as well as a private one: an empty card
@@ -447,7 +406,6 @@ func (p Payload) Public() Payload {
 	// and pinned entries exist.
 	out.Meta.GroupCount = len(out.Config.Groups)
 	out.Meta.LinkCount = out.Config.LinkCount()
-	out.Meta.PinnedCount = out.Config.PinnedCount()
 	// Warnings name the entry they came from -- "groups[0].links[0] (日记).hotkey:
 	// ..." -- so they would give away exactly what the filtering just removed.
 	// The operator still sees them in the log, and in the page once unlocked.
@@ -687,6 +645,13 @@ func (c *Config) normalize() ([]string, error) {
 	c.Site.Title = strings.TrimSpace(c.Site.Title)
 	if c.Site.Title == "" {
 		c.Site.Title = DefaultTitle
+	}
+	// The logo is the one free-text field that becomes an image or a header
+	// glyph, and it was the only icon-shaped value with no check at all.
+	c.Site.Logo = strings.TrimSpace(c.Site.Logo)
+	if len([]rune(c.Site.Logo)) > maxLogoRunes {
+		warn("site.logo: %d characters is too long to be a glyph or an image url, ignored", len([]rune(c.Site.Logo)))
+		c.Site.Logo = ""
 	}
 
 	c.Layout = strings.ToLower(strings.TrimSpace(c.Layout))
@@ -968,13 +933,25 @@ func darkStyleColor(key string) bool {
 	return false
 }
 
+// maxLogoRunes bounds a text logo. The browser renders a non-url logo as a
+// short piece of text in the header, so an overlong value is a mistake (a url
+// that lost its scheme, say) rather than a design choice.
+const maxLogoRunes = 32
+
 // usableIcon reports whether an icon value is something the browser can render:
 // an absolute image url, or a short glyph such as an emoji.
+//
+// Whitespace disqualifies a glyph, because the browser draws a glyph as-is and
+// treats anything with a space as text to fall back to the favicon: accepting
+// "A B" here only produced a silently ignored value with no warning anywhere.
 func usableIcon(v string) bool {
+	if v == "" {
+		return false
+	}
 	if isImageURL(v) {
 		return true
 	}
-	return len([]rune(v)) <= 4
+	return len([]rune(v)) <= 4 && !strings.ContainsAny(v, " \t\n")
 }
 
 func isImageURL(v string) bool {

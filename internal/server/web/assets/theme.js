@@ -44,5 +44,7 @@
     });
   }
 
-  window.ghomeTheme = { apply: apply, set: set, stored: stored, resolve: resolve, key: KEY };
+  // Only what the page actually calls: apply() already ran above, and resolve
+  // and the storage key are implementation details of this file.
+  window.ghomeTheme = { apply: apply, set: set, stored: stored };
 })();

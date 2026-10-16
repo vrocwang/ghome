@@ -476,6 +476,42 @@ func TestIconValidation(t *testing.T) {
 	if len(warnings) != 1 {
 		t.Errorf("warnings = %v, want one", warnings)
 	}
+
+	// A short string with whitespace is not a glyph the browser will draw: it
+	// used to pass validation and then be silently ignored by the frontend, so
+	// the config looked accepted while the icon never appeared.
+	cfg, warnings = parseWithWarnings(t, "groups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n        icon: \"A B\"\n")
+	if cfg.Groups[0].Links[0].Icon != "" {
+		t.Errorf("icon with a space = %q, want it cleared with a warning", cfg.Groups[0].Links[0].Icon)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %v, want one for the whitespace glyph", warnings)
+	}
+}
+
+// The site logo is rendered as an image when it looks like a url and as text
+// otherwise, and it was the one icon-shaped value with no validation at all.
+func TestSiteLogoIsBounded(t *testing.T) {
+	for _, ok := range []string{"🧭", "My Nav", "https://cdn.example.com/logo.png", "/assets/logo.svg"} {
+		cfg := mustParse(t, "site:\n  logo: \""+ok+"\"\ngroups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n")
+		if cfg.Site.Logo != ok {
+			t.Errorf("logo %q was dropped", ok)
+		}
+	}
+
+	cfg, warnings := parseWithWarnings(t, "site:\n  logo: \""+strings.Repeat("x", 40)+"\"\ngroups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n")
+	if cfg.Site.Logo != "" {
+		t.Errorf("logo = %q, want an overlong text logo cleared", cfg.Site.Logo)
+	}
+	if len(warnings) != 1 {
+		t.Errorf("warnings = %v, want one", warnings)
+	}
+
+	// Whitespace is trimmed, like the other text fields.
+	cfg = mustParse(t, "site:\n  logo: \"  🧭  \"\ngroups:\n  - name: x\n    links:\n      - name: a\n        url: https://a.example.com\n")
+	if cfg.Site.Logo != "🧭" {
+		t.Errorf("logo = %q, want it trimmed", cfg.Site.Logo)
+	}
 }
 
 func TestPinnedAndProbe(t *testing.T) {
@@ -492,10 +528,6 @@ groups:
       - name: plain
         url: https://c.example.com
 `)
-	if cfg.PinnedCount() != 1 {
-		t.Errorf("PinnedCount() = %d, want 1", cfg.PinnedCount())
-	}
-
 	// Probe targets skip the opted-out link and keep the rest in order.
 	targets := cfg.ProbeTargets()
 	want := []string{"https://a.example.com", "https://c.example.com"}
@@ -703,36 +735,6 @@ func TestPublicOnConfigWithNoPrivateEntries(t *testing.T) {
 	if got := len(cfg.Public().Groups); got != len(cfg.Groups) {
 		t.Errorf("Public() dropped %d groups from a config with nothing private",
 			len(cfg.Groups)-got)
-	}
-}
-
-func TestPrivateOnlyHosts(t *testing.T) {
-	cfg := mustParse(t, `
-groups:
-  - name: public
-    links:
-      - {name: a, url: "https://shared.example.com/"}
-      - {name: b, url: "https://lonely.example.com/", private: true}
-  - name: secret
-    private: true
-    links:
-      - {name: c, url: "https://shared.example.com/deep"}
-      - {name: d, url: "https://hidden.example.com/"}
-`)
-
-	got := cfg.PrivateOnlyHosts()
-	for _, host := range []string{"lonely.example.com", "hidden.example.com"} {
-		if _, ok := got[host]; !ok {
-			t.Errorf("%s is used only by private entries but was not withheld", host)
-		}
-	}
-	// A public link uses this host, so withholding its icon would break the
-	// public page for no gain.
-	if _, ok := got["shared.example.com"]; ok {
-		t.Error("a host a public link also uses was treated as private-only")
-	}
-	if len(got) != 2 {
-		t.Errorf("PrivateOnlyHosts() = %v, want exactly the two private-only hosts", got)
 	}
 }
 

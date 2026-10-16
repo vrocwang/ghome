@@ -30,8 +30,10 @@ type Source interface {
 // and ride the same push-to-update path.
 type MultiFile interface {
 	Source
-	// FetchPath reads one file, given a path relative to the config file's
-	// directory. Implementations must refuse to escape that directory.
+	// FetchPath reads one file, given a repository-relative path (for the forge
+	// source) or a path inside the config file's directory (for the file
+	// source). Implementations must refuse to escape the repository or the
+	// directory respectively.
 	FetchPath(ctx context.Context, path string) (Snapshot, error)
 }
 

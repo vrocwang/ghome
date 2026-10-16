@@ -7,7 +7,6 @@ import (
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -37,6 +36,10 @@ type fakeGitea struct {
 	mu       sync.Mutex
 	files    map[string]string
 	requests map[string]int
+	// repoToken is the token GET /api/v1/repos/acme/nav accepts; repoStatus
+	// overrides the answer so a broken forge can be simulated.
+	repoToken  string
+	repoStatus int
 }
 
 func newFakeGitea(t *testing.T) *fakeGitea {
@@ -44,6 +47,27 @@ func newFakeGitea(t *testing.T) *fakeGitea {
 
 	g := &fakeGitea{files: map[string]string{}, requests: map[string]int{}}
 	mux := http.NewServeMux()
+	// The viewer-token check for the private tier reads the repository, not a
+	// file, so wiring the whole chain needs this endpoint too.
+	mux.HandleFunc("GET /api/v1/repos/{owner}/{repo}", func(w http.ResponseWriter, r *http.Request) {
+		g.mu.Lock()
+		token, status := g.repoToken, g.repoStatus
+		g.mu.Unlock()
+
+		switch {
+		case status != 0:
+			w.WriteHeader(status)
+		case token == "":
+			w.WriteHeader(http.StatusNotFound)
+		case strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") != token:
+			w.WriteHeader(http.StatusForbidden)
+		default:
+			w.Header().Set("Content-Type", "application/json")
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"full_name": r.PathValue("owner") + "/" + r.PathValue("repo"),
+			})
+		}
+	})
 	mux.HandleFunc("GET /api/v1/repos/{owner}/{repo}/contents/{path...}", func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer test-token" {
 			w.WriteHeader(http.StatusUnauthorized)
@@ -452,5 +476,149 @@ func themeRevisionOf(t *testing.T, navRev, cssRev string) string {
 	if payload.Meta.ThemeRevision == "" {
 		t.Fatal("ThemeRevision is empty")
 	}
-	return fmt.Sprintf("%s|%s", payload.Meta.ThemeRevision, "")
+	return payload.Meta.ThemeRevision
+}
+
+// The private tier is the one feature whose whole chain -- token in a header,
+// a permission question asked of the forge, filtering that happens on the
+// server -- cannot be checked by either package's own tests. The unit tests
+// replace the verifier with a function, so the wiring that decides which
+// function that is, and the response the browser actually receives, are only
+// observable here.
+func TestPrivateTierEndToEnd(t *testing.T) {
+	gitea := newFakeGitea(t)
+	gitea.set("nav.yaml", `
+groups:
+  - name: public
+    links:
+      - {name: open, url: "https://open.example.com"}
+  - name: secret
+    private: true
+    links:
+      - {name: hidden, url: "https://hidden.example.com"}
+`)
+	gitea.repoToken = "viewer-token"
+
+	src, err := source.NewGitea(source.GiteaOptions{
+		BaseURL: gitea.server.URL, Owner: "acme", Repo: "nav",
+		Ref: "main", Path: "nav.yaml", Token: "test-token",
+	})
+	if err != nil {
+		t.Fatalf("NewGitea() error = %v", err)
+	}
+
+	st := store.New()
+	watch := watcher.New(src, st, time.Hour, discardLogger())
+	srv, err := server.New(server.Options{
+		Store:   st,
+		Trigger: watch.Kick,
+		Verify:  src.CheckRead,
+		Source:  src.Describe(),
+		Logger:  discardLogger(),
+	})
+	if err != nil {
+		t.Fatalf("server.New() error = %v", err)
+	}
+	web := httptest.NewServer(srv)
+	t.Cleanup(web.Close)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	go watch.Run(ctx)
+	waitFor(t, 5*time.Second, "the initial load", func() bool { return st.Loaded() })
+
+	// Token names a group, because the hidden entries are the whole point.
+	get := func(token string) map[string]any {
+		t.Helper()
+		req, err := http.NewRequest(http.MethodGet, web.URL+"/api/nav", nil)
+		if err != nil {
+			t.Fatalf("build request: %v", err)
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("GET /api/nav: %v", err)
+		}
+		defer func() { _ = res.Body.Close() }()
+		var body map[string]any
+		if err := json.NewDecoder(res.Body).Decode(&body); err != nil {
+			t.Fatalf("decode /api/nav: %v", err)
+		}
+		return body
+	}
+
+	groupsOf := func(body map[string]any) []string {
+		raw, _ := body["groups"].([]any)
+		out := make([]string, 0, len(raw))
+		for _, g := range raw {
+			entry, _ := g.(map[string]any)
+			name, _ := entry["name"].(string)
+			out = append(out, name)
+		}
+		return out
+	}
+	privateOf := func(body map[string]any) map[string]any {
+		view, _ := body["private"].(map[string]any)
+		return view
+	}
+
+	t.Run("anonymous gets the public tier", func(t *testing.T) {
+		body := get("")
+		if got := groupsOf(body); len(got) != 1 || got[0] != "public" {
+			t.Errorf("groups = %v, want only the public one", got)
+		}
+		view := privateOf(body)
+		if view == nil || view["locked"] != true {
+			t.Fatalf("private = %v, want locked", view)
+		}
+		if view["check"] != "rejected" {
+			t.Errorf("check = %v, want rejected for a request with no token", view["check"])
+		}
+	})
+
+	t.Run("a token that can read the repository unlocks it", func(t *testing.T) {
+		body := get("viewer-token")
+		got := groupsOf(body)
+		if len(got) != 2 || got[0] != "public" || got[1] != "secret" {
+			t.Errorf("groups = %v, want both", got)
+		}
+		view := privateOf(body)
+		if view == nil || view["locked"] == true || view["check"] != "ok" {
+			t.Errorf("private = %v, want open with check ok", view)
+		}
+	})
+
+	t.Run("a token the forge refuses stays locked and says so", func(t *testing.T) {
+		body := get("someone-elses-token")
+		if got := groupsOf(body); len(got) != 1 {
+			t.Errorf("groups = %v, want only the public one", got)
+		}
+		if view := privateOf(body); view == nil || view["check"] != "rejected" {
+			t.Errorf("private = %v, want check rejected", view)
+		}
+	})
+
+	t.Run("a forge that cannot answer is not reported as a bad token", func(t *testing.T) {
+		gitea.mu.Lock()
+		gitea.repoStatus = http.StatusBadGateway
+		gitea.mu.Unlock()
+		t.Cleanup(func() {
+			gitea.mu.Lock()
+			gitea.repoStatus = 0
+			gitea.mu.Unlock()
+		})
+
+		// A token whose verdict is not already cached: the previous subtest
+		// established one for viewer-token, and reusing it here would just
+		// prove the cache works.
+		body := get("viewer-token-2")
+		if got := groupsOf(body); len(got) != 1 {
+			t.Errorf("groups = %v, want only the public one", got)
+		}
+		if view := privateOf(body); view == nil || view["check"] != "unavailable" {
+			t.Errorf("private = %v, want check unavailable", view)
+		}
+	})
 }

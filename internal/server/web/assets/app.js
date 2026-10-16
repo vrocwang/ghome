@@ -59,6 +59,14 @@
     dotNodes: [],     // { url, el } so status updates can patch in place
     renderedRev: null,
     renderedThemeRev: null,
+    // The private view is per request and deliberately not part of the
+    // revision, so it needs a key of its own: unlocking changes the response
+    // without moving meta.revision, and gating the redraw on the revision alone
+    // then reports "unlocked" while the page stays locked.
+    renderedViewKey: null,
+    // Bumped by every load(), so a response that arrives after a newer one can
+    // be dropped instead of dragging the page back to a stale revision.
+    loadSeq: 0,
     lastFetch: 0,
     pollTimer: null,
     source: null,
@@ -199,6 +207,32 @@
     return state.status && state.status.enabled ? 'checking' : null;
   }
 
+  // A target nobody has probed yet arrives as a zero Go time, which is a
+  // truthy string: "0001-01-01T00:00:00Z". Treating that as a check time would
+  // have every unprobed service claim it was checked in the year 1.
+  function realTime(iso) {
+    if (!iso) return false;
+    var d = new Date(iso);
+    return !isNaN(d.getTime()) && d.getFullYear() > 2000;
+  }
+
+  // How many distinct services will get a result at all. Missing results are
+  // not in the count, so a denominator built from them would report "9/9 在线"
+  // while three targets had never answered.
+  function targetCount() {
+    var cfg = state.config;
+    if (!cfg || !cfg.groups) return 0;
+    var seen = {}, n = 0;
+    cfg.groups.forEach(function (group) {
+      (group.links || []).forEach(function (link) {
+        if (!probeable(link) || seen[link.url]) return;
+        seen[link.url] = true;
+        n++;
+      });
+    });
+    return n;
+  }
+
   function statusTitle(url) {
     var result = statusFor(url);
     if (!result) return state.status.enabled ? '正在探测…' : '';
@@ -206,10 +240,12 @@
     if (result.state === 'up') parts.push('在线');
     else if (result.state === 'down') parts.push('无法访问');
     else parts.push('状态未知');
-    if (result.code) parts.push('HTTP ' + result.code);
+    // undefined guards are for code/latency: omitted JSON fields, or a failure
+    // that happened before either was known.
+    if (typeof result.code === 'number') parts.push('HTTP ' + result.code);
     if (result.latencyMs) parts.push(result.latencyMs + ' ms');
     if (result.error) parts.push(result.error);
-    if (result.checkedAt) parts.push('探测于 ' + formatTime(result.checkedAt));
+    if (realTime(result.checkedAt)) parts.push('探测于 ' + formatTime(result.checkedAt));
     return parts.join(' · ');
   }
 
@@ -225,12 +261,15 @@
       if (results[url].state === 'up') up++;
       else if (results[url].state === 'down') down++;
     });
+    // The denominator is every target the server will probe, not just the ones
+    // with a result yet, or the first minute of a fresh page reads "全部正常".
+    var known = Math.max(targetCount(), total);
 
-    var problems = total - up;
-    els.healthText.textContent = total ? up + '/' + total + ' 在线' : '探测中…';
+    var problems = known - up;
+    els.healthText.textContent = total ? up + '/' + known + ' 在线' : '探测中…';
     els.healthDot.className = 'dot ' + (down > 0 ? 'down' : (problems > 0 ? 'unknown' : 'up'));
     els.healthPill.title = problems > 0
-      ? problems + ' 个服务异常，点击只看异常'
+      ? problems + ' 个服务未在线，点击只看异常'
       : '全部正常，点击只看异常';
     els.healthPill.setAttribute('aria-pressed', state.onlyProblems ? 'true' : 'false');
   }
@@ -239,10 +278,12 @@
   // round every minute does not disturb scroll position or selection.
   function applyStatus() {
     state.dotNodes.forEach(function (entry) {
-      var s = statusState(entry.url);
-      entry.el.className = 'dot ' + (s || 'unknown');
-      var title = statusTitle(entry.url);
-      if (title) entry.el.title = title;
+      // A dot only exists when status is enabled (statusDot), and loading a
+      // config with it disabled goes through render(), which drops them.
+      entry.el.className = 'dot ' + statusState(entry.url);
+      // Unconditional: clearing the title matters as much as setting it, or a
+      // link keeps describing a state that no longer applies.
+      entry.el.title = statusTitle(entry.url);
     });
     renderHealthPill();
     if (state.onlyProblems) renderContent();
@@ -278,13 +319,13 @@
     if (!view.locked) els.unlockForm.hidden = true;
   }
 
-  // The revision does not change when you unlock, so load() would decide there
-  // is nothing to redraw. Clearing it forces a render. The result says whether
-  // the view could be fetched at all: "still locked" is only a refusal when the
-  // server actually answered.
+  // The view's key changes with the token, so the redraw gate catches an
+  // unlock by itself; forceRender covers the case where the server answers with
+  // the same key (a token that turned out not to unlock anything) and the lock
+  // state still has to be redrawn. The result says whether the view could be
+  // fetched at all: "still locked" is only a refusal when the server answered.
   function reloadView() {
-    state.renderedRev = null;
-    return load({ notify: false });
+    return load({ notify: false, forceRender: true });
   }
 
   function wireUnlock() {
@@ -310,12 +351,15 @@
 
       setStoredToken(value);
       els.unlockToken.value = '';
-      var fetched = await reloadView();
+      await reloadView();
 
-      var view = state.config && state.config.private;
-      if (view && view.locked && fetched) {
-        // The forge refused it. Say so, rather than leaving the page looking
-        // exactly as before, which reads as "the button is broken".
+      var view = (state.config && state.config.private) || null;
+      // The server says why the tier stayed shut: "rejected" means the forge
+      // answered and refused this token; "unavailable" means the check could
+      // not be run at all. Treating the second as a refusal threw away a good
+      // token whenever the forge hiccupped, and named the wrong cause.
+      var check = view ? view.check : '';
+      if (view && view.locked && check === 'rejected') {
         setStoredToken('');
         await reloadView();
         els.unlockForm.hidden = false;
@@ -324,12 +368,14 @@
         return;
       }
       if (view && view.locked) {
-        // The request never got an answer (server restarting, network blip).
-        // The token is kept: throwing it away here would make the user re-paste
-        // a perfectly good one while debugging the wrong thing.
+        // Either the server could not check the token, or the request never got
+        // an answer (restarting, network blip). Keep the token: making the user
+        // re-paste a good one while debugging the wrong thing is worse.
         els.unlockForm.hidden = false;
         els.unlockToken.focus();
-        toast('暂时无法确认令牌，请重试');
+        toast(check === 'unavailable'
+          ? '暂时无法确认令牌（配置仓不可达），请稍后重试'
+          : '暂时无法确认令牌，请重试');
         return;
       }
       els.unlockForm.hidden = true;
@@ -488,7 +534,13 @@
       applyLinkTarget(a, link);
       a.title = link.description ? link.name + ' — ' + link.description : link.name;
       a.appendChild(iconFor(link, revision));
-      a.appendChild(el('span', 'tile-name', link.name));
+      var tileName = el('span', 'tile-name');
+      tileName.appendChild(el('span', 'nm', link.name));
+      // The tile has to carry the hotkey element too: the global handler finds
+      // a link's key by looking for this node, so a hotkey on a pinned entry
+      // was silently dead (and a pinned "t" fell through to the theme toggle).
+      if (link.hotkey) tileName.appendChild(el('kbd', 'hotkey', link.hotkey));
+      a.appendChild(tileName);
       var tileDot = statusDot(link);
       if (tileDot) a.appendChild(tileDot);
       els.pinnedRow.appendChild(a);
@@ -551,7 +603,9 @@
     if (!state.status || !state.status.enabled) return null;
     if (!probeable(link)) return null;
     var wrap = el('span', 'link-status');
-    var dot = el('span', 'dot ' + (statusState(link.url) || 'checking'));
+    // statusState never returns null once status is enabled, which is the only
+    // way a dot exists at all.
+    var dot = el('span', 'dot ' + statusState(link.url));
     var title = statusTitle(link.url);
     if (title) dot.title = title;
     wrap.appendChild(dot);
@@ -735,11 +789,33 @@
       if (body && body.detail) message += '：' + body.detail;
       throw new Error(message);
     }
+    // A 200 whose body is not JSON (a captive portal, a proxy error page) used
+    // to reach load() as null and throw there, which left the page on its
+    // skeleton with no stream, no poll and no retry button.
+    if (!body || typeof body !== 'object') {
+      throw new Error('服务端返回了非预期的响应');
+    }
     return body;
   }
 
+  // The private view is not part of revision, so it needs its own change key.
+  // Without it an unlock (or a revocation, once the server's cached verdict
+  // expires) replaces the payload while the redraw gate says "same revision,
+  // nothing to do" -- the page then keeps the old DOM and the old padlock.
+  function viewKey(cfg) {
+    var view = cfg && cfg.private;
+    if (!view || !view.total) return 'none';
+    return (view.locked ? 'locked:' : 'open:') + view.total;
+  }
+
+  // load() has many callers (SSE, the fallback poll, tab focus, retry, unlock)
+  // and none of them are ordered. A response that arrives after a newer one is
+  // dropped: rendering it would move the page back to an older revision, and
+  // since the newer change was already consumed and reported, nothing would
+  // correct it until some unrelated push.
   async function load(options) {
     options = options || {};
+    var seq = ++state.loadSeq;
 
     var navError = null;
     var navPromise = fetchJSON('api/nav').then(function (body) {
@@ -754,7 +830,20 @@
     }).catch(function () { /* leave the previous status in place */ });
 
     await Promise.all([navPromise, statusPromise]);
+
+    var stale = seq !== state.loadSeq;
     state.lastFetch = Date.now();
+
+    if (stale) {
+      // This response lost a race. It must not render, but it may still be
+      // holding a stylesheet revision the newer request never saw -- the theme
+      // revision moves on its own, so an SSE event that changes the config can
+      // beat the browser's copy of custom.css. Handing that marker back to
+      // "unknown" costs one extra applyThemeSheet and closes the window.
+      var seen = (state.config && state.config.meta && state.config.meta.themeRevision) || null;
+      if (seen && seen !== state.renderedThemeRev) state.renderedThemeRev = null;
+      return false;
+    }
 
     if (navError) {
       if (state.config) {
@@ -767,22 +856,31 @@
 
     var meta = state.config.meta || {};
     var revision = meta.revision;
-    var themeRevision = meta.themeRevision || revision;
+    var themeRevision = meta.themeRevision;
 
     // The stylesheet is tracked separately from the document on purpose: a
     // push that only touches custom.css leaves the config revision untouched,
     // so gating the stylesheet on it would leave a live page showing stale
     // styling until somebody reloaded.
     var themeChanged = themeRevision !== state.renderedThemeRev;
-    var navChanged = revision !== state.renderedRev;
+    var key = viewKey(state.config);
+    var viewChanged = key !== state.renderedViewKey;
+    var navChanged = revision !== state.renderedRev || viewChanged || options.forceRender === true;
 
     if (themeChanged) {
       state.renderedThemeRev = themeRevision;
       applyThemeSheet(themeRevision);
+      // A stylesheet that never arrives leaves the page on the built-in tokens,
+      // and the marker has already been recorded, so nothing would ever retry.
+      // Clearing it lets the next load that sees the same revision refetch.
+      els.themeSheet.addEventListener('error', function () {
+        if (state.renderedThemeRev === themeRevision) state.renderedThemeRev = null;
+      }, { once: true });
     }
 
     if (navChanged) {
       state.renderedRev = revision;
+      state.renderedViewKey = key;
       var scrollY = window.scrollY;
       render();
       window.scrollTo(0, scrollY);
@@ -990,7 +1088,10 @@
     wireUnlock();
     updateThemeLabel();
     renderSkeletons();
-    load({ silent: false }).then(connect);
+    // Live updates must not depend on the first fetch succeeding: chaining off
+    // load() alone meant one bad first response left the page with no SSE and
+    // no fallback poll, so it could never recover on its own.
+    load({ silent: false }).catch(function () {}).then(connect);
   }
 
   init();

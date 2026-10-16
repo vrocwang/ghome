@@ -189,10 +189,6 @@ func TestProberSupervisor(t *testing.T) {
 	if p.Snapshot(nil) == nil {
 		t.Error("Snapshot() = nil before any config was applied")
 	}
-	if targets, _, _ := p.Stats(); targets != 0 {
-		t.Errorf("Stats() targets = %d before any config, want 0", targets)
-	}
-
 	p.apply(parseCfg(t, doc("15s")))
 	first := p.current
 	if first == nil {
@@ -216,7 +212,7 @@ func TestProberSupervisor(t *testing.T) {
 		"\ngroups:\n  - name: x\n    links:\n      - name: svc\n        url: "+target.URL+"\n")
 	p.apply(disabled)
 	waitFor(t, 3*time.Second, "probe targets to be cleared", func() bool {
-		targets, _, _ := p.Stats()
+		targets, _, _ := p.current.Stats()
 		return targets == 0
 	})
 
@@ -585,5 +581,70 @@ func TestCacheRoundTripKeepsTheStylesheet(t *testing.T) {
 	loadCache(path, empty, discardLogger())
 	if _, _, ok := empty.CSS(); ok {
 		t.Error("a cached config without a stylesheet restored one")
+	}
+}
+
+// The two tests above match names only, which is how the README table came to
+// claim defaults the program does not use -- a wrong default in a reference
+// table is worse than a missing row, because it looks authoritative. This
+// checks the values too: every GHOME_* variable's fallback in main.go has to
+// appear somewhere in its own README row.
+func TestReadmeDocumentsTheRealDefaults(t *testing.T) {
+	src, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatalf("read main.go: %v", err)
+	}
+	readme, err := os.ReadFile("README.md")
+	if err != nil {
+		t.Fatalf("read README.md: %v", err)
+	}
+
+	// env("GHOME_FORGE_REF", "main") and the duration form both end in the
+	// default as a quoted literal.
+	pattern := regexp.MustCompile(`env(?:Duration)?\(\s*"(GHOME_[A-Z_]+)"\s*,\s*([^)]+)\)`)
+	matches := pattern.FindAllStringSubmatch(string(src), -1)
+	if len(matches) < 15 {
+		t.Fatalf("found only %d GHOME_* defaults in main.go; the pattern is wrong", len(matches))
+	}
+
+	rows := map[string]string{}
+	for _, line := range strings.Split(string(readme), "\n") {
+		m := regexp.MustCompile("^\\| `--[a-z-]+` \\| `(GHOME_[A-Z_]+)`").FindStringSubmatch(line)
+		if m != nil {
+			rows[m[1]] = line
+		}
+	}
+
+	checked := 0
+	for _, m := range matches {
+		name, expr := m[1], strings.TrimSpace(m[2])
+		row, ok := rows[name]
+		if !ok {
+			t.Errorf("README.md has no flag table row for %s", name)
+			continue
+		}
+		// A literal default (or the literal inside a call such as
+		// env("GHOME_SOURCE", "file")); a computed one has nothing to check
+		// against the prose.
+		literals := regexp.MustCompile(`"([^"]*)"`).FindAllStringSubmatch(expr, -1)
+		if len(literals) == 0 {
+			continue
+		}
+		want := literals[len(literals)-1][1]
+		if want == "" {
+			continue // "empty" is the documented default and reads the same bare
+		}
+		checked++
+		if !strings.Contains(row, want) {
+			t.Errorf("%s defaults to %q in main.go but the README row does not say so:\n  %s",
+				name, want, row)
+		}
+	}
+	// Most defaults are either the empty string or a Go duration expression
+	// ("60*time.Second"), neither of which is comparable to prose. A handful of
+	// plain string defaults is what this can honestly check, and it is the
+	// handful that had drifted.
+	if checked < 5 {
+		t.Fatalf("only %d defaults were comparable; the pattern is too weak to mean anything", checked)
 	}
 }

@@ -37,9 +37,6 @@ func NewFile(path string) (*File, error) {
 	return &File{path: abs, dir: filepath.Dir(abs)}, nil
 }
 
-// Path is the absolute path being watched.
-func (f *File) Path() string { return f.path }
-
 func (f *File) Describe() string { return "file:" + f.path }
 
 func (f *File) Fetch(ctx context.Context) (Snapshot, error) {

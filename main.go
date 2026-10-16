@@ -125,9 +125,9 @@ func run() error {
 	// File mode has no forge to ask. That leaves the tier locked for everyone
 	// rather than open to everyone, which is the safe direction, but it is
 	// worth saying out loud because the symptom is silence.
-	var verifyPrivate func(context.Context, string) bool
+	var verifyPrivate func(context.Context, string) source.Access
 	if g, ok := src.(*source.Gitea); ok {
-		verifyPrivate = g.CanRead
+		verifyPrivate = g.CheckRead
 	}
 
 	var warnedPrivate atomic.Bool
@@ -375,17 +375,6 @@ func (p *prober) StatsFor(allow map[string]struct{}) (up, down int) {
 		return 0, 0
 	}
 	return p.current.StatsFor(allow)
-}
-
-// Stats reports the unfiltered totals, as the prober itself sees them. It is
-// what the supervisor's own diagnostics and tests use.
-func (p *prober) Stats() (targets, up, down int) {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	if p.current == nil {
-		return 0, 0, 0
-	}
-	return p.current.Stats()
 }
 
 func sameProbeOptions(a, b status.Options) bool {

@@ -13,6 +13,7 @@
 #   * status 开启，且同时有 http、probe: false、ssh:、mailto: 四种链接
 #     （验证"不给服务端不探测的链接挂状态灯"）
 #   * 一条置顶链接（验证置顶项不在分组里重复，且置顶条不渲染标签）
+#   * 置顶链接带一个自己的 hotkey（置顶项走的是另一条渲染路径，热键曾经在这条路上是死的）
 
 site:
   title: 界面回归样本
@@ -56,6 +57,7 @@ groups:
       - name: 置顶项
         url: https://pinned.example.com
         pinned: true
+        hotkey: z
         tags: [pinned]
       - name: 普通项
         url: https://plain.example.com

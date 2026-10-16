@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/vrocwang/ghome/internal/source"
 	"github.com/vrocwang/ghome/internal/status"
 	"github.com/vrocwang/ghome/internal/store"
 )
@@ -40,8 +41,11 @@ func privateServer(t *testing.T) *Server {
 	}
 	srv, _ := newTestServer(t, Options{
 		Store: st,
-		Verify: func(_ context.Context, token string) bool {
-			return token == goodToken
+		Verify: func(_ context.Context, token string) source.Access {
+			if token == goodToken {
+				return source.AccessOK
+			}
+			return source.AccessRejected
 		},
 	})
 	return srv
@@ -56,13 +60,13 @@ type shape struct {
 		} `json:"links"`
 	} `json:"groups"`
 	Meta struct {
-		GroupCount  int `json:"groupCount"`
-		LinkCount   int `json:"linkCount"`
-		PinnedCount int `json:"pinnedCount"`
+		GroupCount int `json:"groupCount"`
+		LinkCount  int `json:"linkCount"`
 	} `json:"meta"`
 	Private *struct {
-		Total  int  `json:"total"`
-		Locked bool `json:"locked"`
+		Total  int    `json:"total"`
+		Locked bool   `json:"locked"`
+		Check  string `json:"check"`
 	} `json:"private"`
 }
 
@@ -125,9 +129,9 @@ func TestNavWithholdsPrivateEntries(t *testing.T) {
 		// The counts describe what is on the page. Leaving them whole-config
 		// made the footer claim links the reader cannot see, and told an
 		// anonymous caller how many private groups exist.
-		if got.Meta.GroupCount != 2 || got.Meta.LinkCount != 2 || got.Meta.PinnedCount != 1 {
-			t.Errorf("meta counts = %d groups / %d links / %d pinned, want the visible 2/2/1",
-				got.Meta.GroupCount, got.Meta.LinkCount, got.Meta.PinnedCount)
+		if got.Meta.GroupCount != 2 || got.Meta.LinkCount != 2 {
+			t.Errorf("meta counts = %d groups / %d links, want the visible 2/2",
+				got.Meta.GroupCount, got.Meta.LinkCount)
 		}
 	})
 
@@ -169,6 +173,47 @@ func TestNavWithholdsPrivateEntries(t *testing.T) {
 
 // Without a verifier the private entries stay hidden for everyone, which is the
 // safe direction for a source that cannot check a token (file mode).
+// The client has to know why the tier stayed shut: "rejected" is a verdict
+// about the token, "unavailable" is a fact about the forge. Without the
+// difference a forge outage is reported to the viewer as a bad token, and their
+// good token is thrown away.
+func TestNavSaysWhyThePrivateTierStayedLocked(t *testing.T) {
+	st := store.New()
+	if err := st.Load([]byte(privateDoc), "rev-1", "test"); err != nil {
+		t.Fatalf("Load() error = %v", err)
+	}
+
+	srv, _ := newTestServer(t, Options{
+		Store: st,
+		Verify: func(_ context.Context, _ string) source.Access {
+			return source.AccessUnavailable
+		},
+	})
+
+	got := getNav(t, srv, "any-token")
+	if got.Private == nil || !got.Private.Locked {
+		t.Fatalf("private = %+v, want locked", got.Private)
+	}
+	if got.Private.Check != string(source.AccessUnavailable) {
+		t.Errorf("check = %q, want %q", got.Private.Check, source.AccessUnavailable)
+	}
+
+	// The unlocked view carries no reason, but it does carry the entries.
+	open, _ := newTestServer(t, Options{
+		Store: st,
+		Verify: func(_ context.Context, _ string) source.Access {
+			return source.AccessOK
+		},
+	})
+	unlocked := getNav(t, open, "any-token")
+	if unlocked.Private == nil || unlocked.Private.Locked || unlocked.Private.Check != string(source.AccessOK) {
+		t.Errorf("private = %+v, want open with check ok", unlocked.Private)
+	}
+	if names := linkNames(unlocked); len(names) != 5 {
+		t.Errorf("links = %v, want all 5 when unlocked", names)
+	}
+}
+
 func TestNavKeepsPrivateHiddenWithoutAVerifier(t *testing.T) {
 	st := store.New()
 	if err := st.Load([]byte(privateDoc), "rev-1", "test"); err != nil {
@@ -208,7 +253,12 @@ groups:
 	srv, _ := newTestServer(t, Options{
 		Store:  st,
 		Status: fakeStatus{results: results},
-		Verify: func(_ context.Context, token string) bool { return token == goodToken },
+		Verify: func(_ context.Context, token string) source.Access {
+			if token == goodToken {
+				return source.AccessOK
+			}
+			return source.AccessRejected
+		},
 	})
 
 	fetch := func(token string) []string {
@@ -247,15 +297,18 @@ groups:
 func TestVerifierCachesVerdicts(t *testing.T) {
 	var calls atomic.Int64
 	now := time.Now()
-	v := newVerifier(func(_ context.Context, token string) bool {
+	v := newVerifier(func(_ context.Context, token string) source.Access {
 		calls.Add(1)
-		return token == goodToken
+		if token == goodToken {
+			return source.AccessOK
+		}
+		return source.AccessRejected
 	})
 	v.now = func() time.Time { return now }
 
 	for i := 0; i < 5; i++ {
-		if !v.allowed(context.Background(), goodToken) {
-			t.Fatal("a good token was refused")
+		if got := v.allowed(context.Background(), goodToken); got != source.AccessOK {
+			t.Fatalf("a good token got %q, want ok", got)
 		}
 	}
 	if got := calls.Load(); got != 1 {
@@ -263,35 +316,71 @@ func TestVerifierCachesVerdicts(t *testing.T) {
 	}
 
 	for i := 0; i < 5; i++ {
-		if v.allowed(context.Background(), "wrong") {
-			t.Fatal("a wrong token was accepted")
+		if got := v.allowed(context.Background(), "wrong"); got != source.AccessRejected {
+			t.Fatalf("a wrong token got %q, want rejected", got)
 		}
 	}
 	if got := calls.Load(); got != 2 {
 		t.Errorf("wrong token caused %d checks total, want 2", got)
 	}
 
-	// Successes outlive failures, so the good token survives a gap that has
-	// already expired the wrong one.
-	now = now.Add(verifyFailureTTL + time.Second)
+	// Both verdicts are cached for their own TTL and no longer. The failure TTL
+	// used to be much shorter, which made a viewer who mistyped a token wait
+	// half a minute before a corrected one was checked; being wrong about the
+	// token is not a reason to be slow about it.
+	now = now.Add(verifyFailureTTL - time.Second)
 	v.allowed(context.Background(), goodToken)
-	if got := calls.Load(); got != 2 {
-		t.Errorf("good verdict expired early: %d checks", got)
-	}
 	v.allowed(context.Background(), "wrong")
+	if got := calls.Load(); got != 2 {
+		t.Errorf("a verdict expired before its TTL: %d checks", got)
+	}
+
+	now = now.Add(2 * time.Second)
+	v.allowed(context.Background(), goodToken)
 	if got := calls.Load(); got != 3 {
+		t.Errorf("switching tokens did not invalidate the verdict: %d checks", got)
+	}
+	// The good token was re-checked a second ago, so it is still fresh.
+	v.allowed(context.Background(), "wrong")
+	if got := calls.Load(); got != 4 {
 		t.Errorf("failure verdict outlived its TTL: %d checks", got)
 	}
 
 	now = now.Add(verifySuccessTTL + time.Second)
 	v.allowed(context.Background(), goodToken)
-	if got := calls.Load(); got != 4 {
+	if got := calls.Load(); got != 5 {
 		t.Errorf("success verdict never expires: %d checks", got)
 	}
 }
 
+// A check that could not be carried out says nothing about the token, so it is
+// remembered only briefly: a forge hiccup must not lock a legitimate viewer out
+// for the whole failure TTL.
+func TestVerifierForgetsAnUnavailableCheckQuickly(t *testing.T) {
+	var calls atomic.Int64
+	now := time.Now()
+	v := newVerifier(func(_ context.Context, _ string) source.Access {
+		calls.Add(1)
+		return source.AccessUnavailable
+	})
+	v.now = func() time.Time { return now }
+
+	if got := v.allowed(context.Background(), goodToken); got != source.AccessUnavailable {
+		t.Fatalf("access = %q, want unavailable", got)
+	}
+	if got := v.allowed(context.Background(), goodToken); got != source.AccessUnavailable || calls.Load() != 1 {
+		t.Fatalf("the unavailable verdict was not cached: %d checks", calls.Load())
+	}
+
+	now = now.Add(verifyUnavailableTTL + time.Second)
+	v.allowed(context.Background(), goodToken)
+	if got := calls.Load(); got != 2 {
+		t.Errorf("unavailable verdict outlived its short TTL: %d checks", got)
+	}
+}
+
 func TestVerifierStaysBounded(t *testing.T) {
-	v := newVerifier(func(_ context.Context, _ string) bool { return false })
+	v := newVerifier(func(_ context.Context, _ string) source.Access { return source.AccessRejected })
 	// Every token fails, so nothing but the bound keeps the map in check.
 	for i := 0; i < verifyMaxEntries*3; i++ {
 		v.allowed(context.Background(), "token-"+string(rune('a'+i%26))+string(rune('a'+i/26%26)))
@@ -306,13 +395,13 @@ func TestVerifierStaysBounded(t *testing.T) {
 
 func TestNilVerifierRefusesEverything(t *testing.T) {
 	var v *verifier
-	if v.allowed(context.Background(), goodToken) {
+	if got := v.allowed(context.Background(), goodToken); got == source.AccessOK {
 		t.Error("a nil verifier accepted a token")
 	}
-	if newVerifier(nil).allowed(context.Background(), goodToken) {
+	if got := newVerifier(nil).allowed(context.Background(), goodToken); got == source.AccessOK {
 		t.Error("a verifier with no check function accepted a token")
 	}
-	if newVerifier(func(context.Context, string) bool { return true }).allowed(context.Background(), "") {
+	if got := newVerifier(func(context.Context, string) source.Access { return source.AccessOK }).allowed(context.Background(), ""); got == source.AccessOK {
 		t.Error("an empty token was accepted")
 	}
 }
@@ -343,9 +432,12 @@ groups:
 	srv, _ := newTestServer(t, Options{
 		Store: st,
 		Icons: &fakeIcons{data: []byte("GIF89a"), ct: "image/gif", ok: true},
-		Verify: func(_ context.Context, token string) bool {
+		Verify: func(_ context.Context, token string) source.Access {
 			checks.Add(1)
-			return token == goodToken
+			if token == goodToken {
+				return source.AccessOK
+			}
+			return source.AccessRejected
 		},
 	})
 
@@ -442,19 +534,22 @@ func TestVerifierIgnoresACancelledCaller(t *testing.T) {
 	cancel()
 
 	var calls atomic.Int64
-	v := newVerifier(func(ctx context.Context, _ string) bool {
+	v := newVerifier(func(ctx context.Context, _ string) source.Access {
 		calls.Add(1)
 		// Stands in for the forge call: a cancelled context would fail here.
-		return ctx.Err() == nil
+		if ctx.Err() != nil {
+			return source.AccessUnavailable
+		}
+		return source.AccessOK
 	})
 
-	if !v.allowed(cancelled, goodToken) {
-		t.Fatal("a cancelled caller turned a good token into a refusal")
+	if got := v.allowed(cancelled, goodToken); got != source.AccessOK {
+		t.Fatalf("a cancelled caller turned a good token into %q", got)
 	}
 	// The success has to be cached, otherwise the caller would still be checked
 	// again on every request.
-	if !v.allowed(context.Background(), goodToken) {
-		t.Fatal("the cached success was not reused")
+	if got := v.allowed(context.Background(), goodToken); got != source.AccessOK {
+		t.Fatalf("the cached success was not reused: got %q", got)
 	}
 	if got := calls.Load(); got != 1 {
 		t.Errorf("check ran %d times, want 1 (the verdict must be cached)", got)

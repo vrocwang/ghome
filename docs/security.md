@@ -37,8 +37,11 @@
 
 ## 写接口
 
-- `POST /api/webhook` 没配 `--webhook-secret` 就返回 403，不工作。签名按 HMAC-SHA256 校验，
-  用 `crypto/subtle.ConstantTimeCompare` 比较（不是 `==`）；Gitea / Forgejo / GitHub 三种头都认。
+- `POST /api/webhook` 没配 `--webhook-secret` 就返回 403，不工作。签名用 HMAC 校验，四种头任一种
+  匹配即可：`X-Forgejo-Signature` / `X-Gitea-Signature`（裸 hex，SHA256）、`X-Hub-Signature-256`
+  （`sha256=` 前缀，SHA256）、`X-Hub-Signature`（`sha1=` 前缀，**SHA1**，为兼容把 Gitea 配成 GitHub
+  风格的实例而保留——它只用来决定"要不要重新拉一次配置"，不是一条内容完整性保证）。比较走
+  `crypto/subtle.ConstantTimeCompare`，不是 `==`。
 - `POST /api/refresh` 没配 `--admin-token` 就返回 403。admin token 与查看者令牌是两个不同的秘密，
   前者也可以用 `X-Ghome-Token` 头给（与 nginx Basic 抢 `Authorization` 时用这个）。
 - 请求体有上限（webhook 1 MiB），读取有超时，签名校验之前不会无限等待。

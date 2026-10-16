@@ -128,11 +128,6 @@ type repoResponse struct {
 	FullName string `json:"full_name"`
 }
 
-// Ref is the configured branch/tag/SHA: which version of the config file to
-// read. It no longer takes part in webhook filtering -- that moved to the git
-// server's own branch filter -- so this is reporting, not policy.
-func (g *Gitea) Ref() string { return g.ref }
-
 func (g *Gitea) Describe() string {
 	return fmt.Sprintf("%s:%s/%s/%s@%s", g.kind, g.owner, g.repo, g.path, g.ref)
 }
@@ -160,7 +155,27 @@ func (g *Gitea) FetchPath(ctx context.Context, path string) (Snapshot, error) {
 	return g.fetchPath(ctx, path)
 }
 
-// CanRead reports whether the supplied token may read this source's repository.
+// Access is the outcome of asking whether a token may read the repository.
+//
+// Rejected and Unavailable are deliberately separate: the first is a fact about
+// the token, the second is a fact about the network, and a caller that treats
+// them alike will hand a forge outage to the user as "your token is wrong".
+type Access string
+
+const (
+	// AccessOK means the forge confirmed this token can read the repository.
+	AccessOK Access = "ok"
+	// AccessRejected means the forge answered and refused. A missing token, a
+	// permission error, or a 200 that is not this repository all land here.
+	AccessRejected Access = "rejected"
+	// AccessUnavailable means the check could not be carried out: a transport
+	// error, a timeout, or a 5xx. It says nothing about the token.
+	AccessUnavailable Access = "unavailable"
+)
+
+// CheckRead reports whether the supplied token may read this source's
+// repository, and when it may not, whether that is a verdict or a failure to
+// ask.
 //
 // This is how a viewer proves it belongs to the group that can already see the
 // config: repository access is the permission, so there is no separate allow
@@ -169,30 +184,37 @@ func (g *Gitea) FetchPath(ctx context.Context, path string) (Snapshot, error) {
 // It is deliberately strict, because a false positive hands over the private
 // entries: the response must be a 200 that names this repository, and a
 // redirect is not followed.
-func (g *Gitea) CanRead(ctx context.Context, token string) bool {
+func (g *Gitea) CheckRead(ctx context.Context, token string) Access {
 	if strings.TrimSpace(token) == "" {
-		return false
+		return AccessRejected
 	}
 	endpoint := fmt.Sprintf("%s/api/v1/repos/%s/%s",
 		g.base, escapeSegment(g.owner), escapeSegment(g.repo))
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
-		return false
+		return AccessUnavailable
 	}
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := g.client.Do(req)
 	if err != nil {
-		return false
+		// A hung forge, a timeout, a DNS failure: none of these are an answer
+		// about the token.
+		return AccessUnavailable
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		_ = resp.Body.Close()
 	}()
+
 	if resp.StatusCode != http.StatusOK {
-		return false
+		if resp.StatusCode >= 500 {
+			// The forge failed rather than judged.
+			return AccessUnavailable
+		}
+		return AccessRejected
 	}
 
 	// A status code alone is not proof. Anything that answers 200 at this URL
@@ -201,9 +223,19 @@ func (g *Gitea) CanRead(ctx context.Context, token string) bool {
 	// typo'd --forge-url) would unlock the private entries.
 	var repo repoResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&repo); err != nil {
-		return false
+		return AccessRejected
 	}
-	return strings.EqualFold(strings.TrimSpace(repo.FullName), g.owner+"/"+g.repo)
+	if !strings.EqualFold(strings.TrimSpace(repo.FullName), g.owner+"/"+g.repo) {
+		return AccessRejected
+	}
+	return AccessOK
+}
+
+// CanRead is CheckRead reduced to a yes/no, for callers with nothing to do with
+// the difference. Anything that is not a clear yes is false, which is the safe
+// direction.
+func (g *Gitea) CanRead(ctx context.Context, token string) bool {
+	return g.CheckRead(ctx, token) == AccessOK
 }
 
 func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {

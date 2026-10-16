@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/source"
 	"github.com/vrocwang/ghome/internal/store"
 )
 
@@ -65,9 +66,10 @@ type Options struct {
 	Icons IconSource
 	// Status reports probe results. Nil disables /api/status.
 	Status StatusSource
-	// Verify reports whether a viewer token may read the config repository.
-	// Nil keeps every private entry hidden, which is the safe default.
-	Verify func(ctx context.Context, token string) bool
+	// Verify reports whether a viewer token may read the config repository, and
+	// when it may not, whether the forge refused it or could not be asked. Nil
+	// keeps every private entry hidden, which is the safe default.
+	Verify func(ctx context.Context, token string) source.Access
 	// Source describes where the config comes from, for /healthz. It is
 	// reported even when nothing has loaded yet, which is precisely when an
 	// operator needs to see what the process is pointed at.
@@ -420,6 +422,13 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A miss is as cacheable as a hit, and marking it so is what keeps a link
+	// whose site has no icon from costing one request per page load. The claim
+	// the 200 path relies on holds here too: the URL carries ?v=<revision>, so
+	// the answer (including "there is none") is fixed for that revision, and
+	// "private" is still required because the answer can depend on the caller.
+	w.Header().Set("Cache-Control", iconCacheControl)
+
 	pageURL, ok := s.hostIndex()[host]
 	if !ok {
 		http.NotFound(w, r)
@@ -444,17 +453,21 @@ func (s *Server) handleIcon(w http.ResponseWriter, r *http.Request) {
 
 	h := w.Header()
 	h.Set("Content-Type", contentType)
-	// The browser passes a revision in ?v=, so a long cache is safe and saves
-	// re-fetching on every page load. "private" rather than "public": the
-	// response can depend on the caller even though the bytes are the same, and
-	// a shared cache that ignores that could hand a private host's icon, or its
-	// 404, to the wrong caller.
-	h.Set("Cache-Control", "private, max-age=604800")
+	h.Set("Cache-Control", iconCacheControl)
 	h.Set("Cross-Origin-Resource-Policy", "same-origin")
 	h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 	h.Set("X-Content-Type-Options", "nosniff")
 	_, _ = w.Write(data)
 }
+
+// iconCacheControl is how long /api/icon may be cached for one config revision.
+//
+// "private" rather than "public": the response can depend on the caller even
+// though the bytes are the same, and a shared cache that ignored that could
+// hand a private host's icon, or its 404, to the wrong caller. That the key
+// carries ?v=<revision> is what makes the long lifetime safe -- a config change
+// moves the revision, and therefore the URL.
+const iconCacheControl = "private, max-age=604800"
 
 // hostIndex maps host -> a configured page URL on that host, built from the
 // public view so a private-only host is absent. It is memoised by config

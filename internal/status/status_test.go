@@ -615,7 +615,7 @@ func TestConcurrentSetTargetsResultsAndRun(t *testing.T) {
 	}()
 
 	var wg sync.WaitGroup
-	for i := range 4 {
+	for range 4 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -632,7 +632,6 @@ func TestConcurrentSetTargetsResultsAndRun(t *testing.T) {
 				_, _, _ = p.Stats()
 				_ = p.Snapshot(nil)
 			}
-			_ = i
 		}()
 	}
 	wg.Wait()
@@ -702,3 +701,94 @@ func TestNewDefaultsAndClamps(t *testing.T) {
 		t.Error("a provided logger must be used as is")
 	}
 }
+
+// Snapshot and StatsFor are the whole mechanism that keeps a hidden link's
+// probe result out of an anonymous response. The HTTP layer's tests for that
+// run against a fake prober that re-implements the filtering, so a bug in the
+// real one would not fail any of them; this asserts the real thing.
+func TestSnapshotAndStatsFilterToTheAllowedSet(t *testing.T) {
+	var hits atomic.Int64
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	public := srv.URL + "/public"
+	private := srv.URL + "/private"
+	down := srv.URL + "/down"
+
+	p := New(Options{
+		Concurrency: 2,
+		Timeout:     time.Second,
+		Client: &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			if req.URL.Path == "/down" {
+				return nil, fmt.Errorf("connection refused")
+			}
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Body:       io.NopCloser(strings.NewReader("")),
+				Header:     make(http.Header),
+				Request:    req,
+			}, nil
+		})},
+		Logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
+	})
+	p.SetTargets([]string{public, private, down})
+	probeOnce(p)
+
+	t.Run("nil allow means no restriction", func(t *testing.T) {
+		got, ok := p.Snapshot(nil).(map[string]Result)
+		if !ok {
+			t.Fatalf("Snapshot(nil) returned %T", p.Snapshot(nil))
+		}
+		if len(got) != 3 {
+			t.Errorf("Snapshot(nil) = %d results, want all 3", len(got))
+		}
+		up, down := p.StatsFor(nil)
+		if up != 2 || down != 1 {
+			t.Errorf("StatsFor(nil) = %d up / %d down, want 2/1", up, down)
+		}
+	})
+
+	t.Run("an allow list withholds everything outside it", func(t *testing.T) {
+		allow := map[string]struct{}{public: {}}
+		got, ok := p.Snapshot(allow).(map[string]Result)
+		if !ok {
+			t.Fatalf("Snapshot(allow) returned %T", p.Snapshot(allow))
+		}
+		if len(got) != 1 {
+			t.Fatalf("Snapshot(allow) = %v, want only the public url", got)
+		}
+		if _, leaked := got[private]; leaked {
+			t.Error("a withheld url's result was published")
+		}
+		if _, leaked := got[down]; leaked {
+			t.Error("a withheld url's result was published")
+		}
+		// The totals have to honour the same rule: "2 up" over a page that
+		// shows one public link announces the other one.
+		up, down := p.StatsFor(allow)
+		if up != 1 || down != 0 {
+			t.Errorf("StatsFor(allow) = %d up / %d down, want 1/0", up, down)
+		}
+	})
+
+	t.Run("an empty allow list publishes nothing", func(t *testing.T) {
+		got, ok := p.Snapshot(map[string]struct{}{}).(map[string]Result)
+		if !ok {
+			t.Fatalf("Snapshot(empty) returned %T", p.Snapshot(map[string]struct{}{}))
+		}
+		if len(got) != 0 {
+			t.Errorf("Snapshot(empty) = %v, want nothing", got)
+		}
+		if up, down := p.StatsFor(map[string]struct{}{}); up != 0 || down != 0 {
+			t.Errorf("StatsFor(empty) = %d/%d, want 0/0", up, down)
+		}
+	})
+}
+
+// roundTripFunc lets a test answer a probe without a socket.
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }

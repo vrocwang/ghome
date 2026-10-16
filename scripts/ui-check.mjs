@@ -219,7 +219,8 @@ try {
     return {
       links: links,
       rendered: rendered,
-      // Pinned entries live in the strip, which never shows tags or a light.
+      // Pinned entries live in the strip, which shows no tags but does show a
+      // status light (and its hotkey).
       tagged: links.filter((l) => l.tags && l.tags.length && !l.pinned)
         .map((l) => ({ name: l.name, want: l.tags.length })),
       showDots: !!(cfg.status && cfg.status.enabled),
@@ -246,25 +247,54 @@ try {
     check('every tag in the config is rendered', tagMismatch.length === 0, tagMismatch.join('; '));
   }
 
-  const dotMismatch = linkView.rendered
-    .map((row) => {
-      const link = linkView.links.find((l) => l.url === row.href);
-      if (!link) return null;
-      // A light only ever appears for a link the server probes, and only when
-      // probing is switched on at all.
-      if (row.hasDot && !link.probeTarget) return `${row.name} has a light but is not probed`;
-      return null;
+  // Both directions: a light on something the server never probes, and a
+  // probeable link that lost its light. Only the first was reported before, so a
+  // regression that dropped every light passed.
+  const dotMismatch = linkView.links
+    .map((link) => {
+      const row = linkView.rendered.find((r) => r.name === link.name);
+      if (!row) return null;
+      const want = linkView.showDots && link.probeTarget === true;
+      if (row.hasDot === want) return null;
+      return want
+        ? `${link.name} should have a light but has none`
+        : `${link.name} has a light but is not probed`;
     })
     .filter(Boolean);
 
-  // This one catches the opposite failure too, so it only needs a config where
-  // probing is on at all; without that there is no light to reason about.
   if (!linkView.showDots) {
-    console.log('  skip no status light on a link the server never probes — status probing is'
+    console.log('  skip status lights match the payload — status probing is'
       + ' switched off in this config, so nothing renders a light');
   } else {
-    check('no status light on a link the server never probes',
+    check('status lights match the payload',
       dotMismatch.length === 0, dotMismatch.join('; '));
+  }
+
+  /* ---------- the health pill counts every target, not just the answers so far ---------- */
+
+  // Its denominator decides whether the pill says "全部正常" over a set of
+  // services nobody has answered for yet.
+  const pill = await evaluate(`(() => {
+    const el = document.getElementById('healthText');
+    const dot = document.getElementById('healthDot');
+    return { text: el ? el.textContent : null, dot: dot ? dot.className : null };
+  })()`);
+  if (!linkView.showDots) {
+    console.log('  skip the health pill counts every target — probing is off in this config');
+  } else {
+    const m = /^(\d+)\/(\d+)/.exec(pill.text || '');
+    const up = m ? Number(m[1]) : 0;
+    const shown = m ? Number(m[2]) : 0;
+    const want = new Set(linkView.links.filter((l) => l.probeTarget === true).map((l) => l.url)).size;
+    check('the health pill counts every target, not just the answers so far',
+      shown === Math.max(want, 1) && up <= shown,
+      `${JSON.stringify(pill.text)} for ${want} probe targets`);
+    // One of the sample links points at a closed port, so a green dot here means
+    // the pill is not looking at the results at all.
+    if (want > 0) {
+      check('the health pill is not green while a target has not answered',
+        !/\bdot up\b/.test(' ' + pill.dot + ' '), pill.dot);
+    }
   }
 
   /* ---------- pinned entries must not be duplicated ---------- */
@@ -277,6 +307,33 @@ try {
     })()`);
     check('pinned entries are not repeated inside groups',
       pinnedNames.duplicated.length === 0, pinnedNames.duplicated.join(', '));
+
+    // Pinned entries take a second rendering path, and the global hotkey handler
+    // finds a link's key by looking for this node: it used to be missing here, so
+    // a hotkey on a pinned entry did nothing (and a pinned "t" hit the theme).
+    const hotkeys = await evaluateAsync(`(async () => {
+      const cfg = await (await fetch('api/nav', { cache: 'no-store' })).json();
+      const want = (cfg.groups || []).flatMap((g) => g.links || [])
+        .filter((l) => l.pinned && l.hotkey)
+        .map((l) => ({ name: l.name, hotkey: l.hotkey }));
+      const tiles = [...document.querySelectorAll('a.tile')].map((t) => ({
+        name: (t.querySelector('.nm') || {}).textContent || '',
+        hotkey: (t.querySelector('.hotkey') || {}).textContent || '',
+      }));
+      return { want: want, tiles: tiles };
+    })()`);
+    const hotkeyMismatch = hotkeys.want
+      .map((w) => {
+        const tile = hotkeys.tiles.find((t) => t.name === w.name);
+        return tile && tile.hotkey.toLowerCase() === w.hotkey.toLowerCase()
+          ? null : `${w.name}: tile shows ${JSON.stringify((tile || {}).hotkey || '')}`;
+      })
+      .filter(Boolean);
+    if (!hotkeys.want.length) {
+      console.log('  skip pinned hotkeys are rendered — no pinned entry in this config has one');
+    } else {
+      check('pinned hotkeys are rendered', hotkeyMismatch.length === 0, hotkeyMismatch.join('; '));
+    }
   }
 
   /* ---------- search ---------- */

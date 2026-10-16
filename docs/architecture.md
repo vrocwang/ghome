@@ -10,7 +10,7 @@
         │
         ▼
    Gitea ──webhook(HMAC 签名)──▶ POST /api/webhook
-        │                              │  校验签名 + 校验分支
+        │                              │  校验签名 + 只认 push 事件
         │                              ▼
         │                        防抖 1.2s（一次 push 可能触发多个钩子）
         │                              │

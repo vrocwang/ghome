@@ -10,12 +10,24 @@
 `/api/nav` 的响应里因此多一个按请求填充的字段：
 
 ```json
-"private": {"total": 3, "locked": true}
+"private": {"total": 3, "locked": true, "check": "rejected"}
 ```
 
 `total` 是被隐藏的条目数（解锁后也用它显示"还有 N 个私密链接"），`locked` 表示这次是否被隐藏；
 配置里没有任何私密条目时这个字段整个不出现，前端据此决定要不要显示那把锁。
-`meta.groupCount` / `meta.linkCount` / `meta.pinnedCount` 与 `meta.warnings` 都只描述**这次响应里
+
+`check` 说明这次为什么没解锁，**前端靠它区分两种失败**：
+
+| 值 | 含义 | 前端的处理 |
+| --- | --- | --- |
+| `ok` | forge 确认这个令牌能读配置仓 | 显示私密条目 |
+| `rejected` | forge 答复了，并拒绝（401/403、仓名不符、非 200/5xx 以外的错误） | 清掉令牌并提示"令牌被拒绝" |
+| `unavailable` | 问不到 forge：传输错误、超时、或 5xx | **保留**令牌，提示稍后重试 |
+
+少了这个区分，一次 forge 抽风就会被当成"你的令牌不对"，把用户刚粘贴的有效令牌删掉。`check` 只在
+配置里真的有私密条目时出现。
+
+`meta.groupCount` / `meta.linkCount` 与 `meta.warnings` 都只描述**这次响应里
 真正有的东西**，所以匿名请求看不出私密分组有几个，也拿不到带条目名的告警。
 
 `/api/icon` 的索引只从**公开**条目建：只被私密条目使用的主机对任何调用者都是 404，与

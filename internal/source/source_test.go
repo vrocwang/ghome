@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func writeFile(path, content string) error {
@@ -77,9 +78,6 @@ func TestGiteaFetchDecodesWrappedBase64(t *testing.T) {
 	}
 	if got := src.Describe(); got != "gitea:acme/nav/nav.yaml@main" {
 		t.Errorf("Describe() = %q", got)
-	}
-	if src.Ref() != "main" {
-		t.Errorf("Ref() = %q, want main", src.Ref())
 	}
 }
 
@@ -196,9 +194,6 @@ func TestGiteaDefaultsRefAndPath(t *testing.T) {
 	src, err := NewGitea(GiteaOptions{BaseURL: "https://git.example.com", Owner: "o", Repo: "r"})
 	if err != nil {
 		t.Fatalf("NewGitea() error = %v", err)
-	}
-	if src.Ref() != "main" {
-		t.Errorf("Ref() = %q, want main", src.Ref())
 	}
 	if got := src.Describe(); got != "gitea:o/r/nav.yaml@main" {
 		t.Errorf("Describe() = %q", got)
@@ -380,9 +375,6 @@ func TestGiteaDescribeUsesTheConfiguredKind(t *testing.T) {
 	if got := forgejo.Describe(); got != "forgejo:acme/homepage/nav.yaml@main" {
 		t.Errorf("Describe() = %q, want forgejo", got)
 	}
-	if forgejo.Ref() != "main" {
-		t.Errorf("Ref() = %q", forgejo.Ref())
-	}
 }
 
 // CanRead is the whole permission model for the private links: any answer it
@@ -439,5 +431,62 @@ func TestCanReadIsStrict(t *testing.T) {
 		if got := src.CanRead(context.Background(), token); got != want {
 			t.Errorf("CanRead(%q) = %v, want %v", token, got, want)
 		}
+	}
+}
+
+// CheckRead has to separate "the forge refused this token" from "the forge
+// could not be asked". A caller that cannot tell them apart reports a forge
+// outage to the viewer as a bad token -- and deletes the token it just took
+// from them.
+func TestCheckReadSeparatesRefusalFromOutage(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v1/repos/acme/nav", func(w http.ResponseWriter, r *http.Request) {
+		switch strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") {
+		case "good":
+			_, _ = io.WriteString(w, `{"full_name":"acme/nav"}`)
+		case "forbidden":
+			w.WriteHeader(http.StatusForbidden)
+		case "missing":
+			w.WriteHeader(http.StatusNotFound)
+		case "broken":
+			w.WriteHeader(http.StatusBadGateway)
+		default:
+			w.WriteHeader(http.StatusUnauthorized)
+		}
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	src, err := NewGitea(GiteaOptions{
+		BaseURL: srv.URL, Owner: "acme", Repo: "nav", Ref: "main", Path: "nav.yaml",
+	})
+	if err != nil {
+		t.Fatalf("NewGitea() error = %v", err)
+	}
+
+	want := map[string]Access{
+		"good":      AccessOK,
+		"forbidden": AccessRejected, // the forge answered
+		"missing":   AccessRejected, // and so did this one
+		"wrong":     AccessRejected,
+		"":          AccessRejected,
+		"broken":    AccessUnavailable, // 5xx: the forge failed, it did not judge
+	}
+	for token, expected := range want {
+		if got := src.CheckRead(context.Background(), token); got != expected {
+			t.Errorf("CheckRead(%q) = %q, want %q", token, got, expected)
+		}
+	}
+
+	// An unreachable forge is the same answer, not a refusal.
+	dead, err := NewGitea(GiteaOptions{
+		BaseURL: "http://127.0.0.1:1", Owner: "acme", Repo: "nav",
+		Timeout: 200 * time.Millisecond,
+	})
+	if err != nil {
+		t.Fatalf("NewGitea() error = %v", err)
+	}
+	if got := dead.CheckRead(context.Background(), "good"); got != AccessUnavailable {
+		t.Errorf("CheckRead() against a dead forge = %q, want unavailable", got)
 	}
 }

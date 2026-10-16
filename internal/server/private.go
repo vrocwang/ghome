@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
+	"github.com/vrocwang/ghome/internal/source"
 )
 
 // Verification verdicts are cached for two reasons. A page load should not
@@ -16,8 +17,12 @@ import (
 const (
 	verifyTimeout    = 10 * time.Second
 	verifySuccessTTL = 5 * time.Minute
-	verifyFailureTTL = 30 * time.Second
-	verifyMaxEntries = 256
+	verifyFailureTTL = 5 * time.Minute
+	// verifyUnavailableTTL is much shorter: nothing was learned about the token,
+	// so remembering it for long would lock a legitimate viewer out over a
+	// forge hiccup.
+	verifyUnavailableTTL = 30 * time.Second
+	verifyMaxEntries     = 256
 )
 
 // verifier answers "may this token read the config repository", with a small
@@ -26,7 +31,7 @@ const (
 // A nil verifier is the safe default: the private entries stay hidden and
 // nothing can unlock them.
 type verifier struct {
-	check func(context.Context, string) bool
+	check func(context.Context, string) source.Access
 	now   func() time.Time
 
 	mu   sync.Mutex
@@ -34,11 +39,11 @@ type verifier struct {
 }
 
 type verdict struct {
-	ok    bool
-	until time.Time
+	access source.Access
+	until  time.Time
 }
 
-func newVerifier(check func(context.Context, string) bool) *verifier {
+func newVerifier(check func(context.Context, string) source.Access) *verifier {
 	return &verifier{
 		check: check,
 		now:   time.Now,
@@ -46,10 +51,13 @@ func newVerifier(check func(context.Context, string) bool) *verifier {
 	}
 }
 
-// allowed reports whether the token may see the private entries.
-func (v *verifier) allowed(ctx context.Context, token string) bool {
+// allowed reports whether the token may see the private entries, and why not
+// when it may not. "Unavailable" is a distinct answer on purpose: it is the
+// difference between "this token is wrong" (clear it, tell the user) and "the
+// forge could not be asked" (keep it, tell the user to retry).
+func (v *verifier) allowed(ctx context.Context, token string) source.Access {
 	if v == nil || v.check == nil || token == "" {
-		return false
+		return source.AccessRejected
 	}
 	sum := sha256.Sum256([]byte(token))
 	key := hex.EncodeToString(sum[:])
@@ -57,7 +65,7 @@ func (v *verifier) allowed(ctx context.Context, token string) bool {
 	v.mu.Lock()
 	if got, ok := v.seen[key]; ok && v.now().Before(got.until) {
 		v.mu.Unlock()
-		return got.ok
+		return got.access
 	}
 	v.mu.Unlock()
 
@@ -68,20 +76,23 @@ func (v *verifier) allowed(ctx context.Context, token string) bool {
 	checkCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), verifyTimeout)
 	defer cancel()
 
-	ok := v.check(checkCtx, token)
+	access := v.check(checkCtx, token)
 
-	ttl := verifyFailureTTL
-	if ok {
+	ttl := verifyUnavailableTTL
+	switch access {
+	case source.AccessOK:
 		ttl = verifySuccessTTL
+	case source.AccessRejected:
+		ttl = verifyFailureTTL
 	}
 	v.mu.Lock()
 	if len(v.seen) >= verifyMaxEntries {
 		v.evictLocked()
 	}
-	v.seen[key] = verdict{ok: ok, until: v.now().Add(ttl)}
+	v.seen[key] = verdict{access: access, until: v.now().Add(ttl)}
 	v.mu.Unlock()
 
-	return ok
+	return access
 }
 
 // evictLocked drops expired verdicts, and everything if that was not enough.
@@ -108,11 +119,12 @@ func (s *Server) viewFor(ctx context.Context, token string, payload nav.Payload)
 	if total == 0 {
 		return payload
 	}
-	if s.private.allowed(ctx, token) {
-		payload.Private = &nav.PrivateView{Total: total}
+	access := s.private.allowed(ctx, token)
+	if access == source.AccessOK {
+		payload.Private = &nav.PrivateView{Total: total, Check: string(access)}
 		return payload
 	}
 	out := payload.Public()
-	out.Private = &nav.PrivateView{Total: total, Locked: true}
+	out.Private = &nav.PrivateView{Total: total, Locked: true, Check: string(access)}
 	return out
 }

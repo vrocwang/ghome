@@ -62,9 +62,9 @@
 ## 排查用的东西
 
 ```bash
-curl -s localhost:8080/healthz | python3 -m json.tool   # status / revision / lastError
-journalctl -u ghome -f                                  # config warning、webhook、探测摘要
-curl -sI localhost:8080/theme.css                       # 样式表是否带上了修订号
+curl -s localhost:8080/healthz | python3 -m json.tool        # status / revision / lastError
+journalctl -u ghome -f                                       # config warning、webhook、探测摘要
+curl -s localhost:8080/theme.css | grep "custom.css @"       # 样式表有没有带上 custom.css 的修订号
 ```
 
 `/healthz` 的 `status` 含义：`ok` 一切正常 · `degraded` 页面在正常工作但 git 里的配置是坏的

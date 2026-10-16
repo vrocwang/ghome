@@ -17,14 +17,13 @@ import (
 
 // Store is a concurrency safe holder for the current document.
 type Store struct {
-	mu           sync.RWMutex
-	payload      nav.Payload
-	raw          []byte
-	css          []byte
-	cssRev       string
-	loaded       bool
-	lastErr      error
-	lastWarnings []string
+	mu      sync.RWMutex
+	payload nav.Payload
+	raw     []byte
+	css     []byte
+	cssRev  string
+	loaded  bool
+	lastErr error
 
 	subsMu sync.Mutex
 	subs   map[int]chan struct{}
@@ -63,13 +62,11 @@ func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings [
 			Source:        src,
 			GroupCount:    len(cfg.Groups),
 			LinkCount:     cfg.LinkCount(),
-			PinnedCount:   cfg.PinnedCount(),
 			Warnings:      warnings,
 		},
 	}
 	s.loaded = true
 	s.lastErr = nil
-	s.lastWarnings = warnings
 	s.mu.Unlock()
 
 	s.notify()
@@ -86,7 +83,6 @@ func (s *Store) Load(raw []byte, rev, src string, css ...string) error {
 	cfg, warnings, err := nav.Parse(raw)
 	if err != nil {
 		s.SetError(err)
-		s.setWarnings(warnings)
 		return err
 	}
 	var cssData []byte
@@ -137,26 +133,10 @@ func (s *Store) LastError() error {
 	return s.lastErr
 }
 
-// Warnings returns the warnings from the most recent attempt, whether or not it
-// succeeded. The watcher logs them and the page shows them once unlocked; the
-// unauthenticated /healthz deliberately carries none, because the text names
-// the entry it came from.
-func (s *Store) Warnings() []string {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.lastWarnings
-}
-
 // SetError records a failure. Passing nil clears it.
 func (s *Store) SetError(err error) {
 	s.mu.Lock()
 	s.lastErr = err
-	s.mu.Unlock()
-}
-
-func (s *Store) setWarnings(w []string) {
-	s.mu.Lock()
-	s.lastWarnings = w
 	s.mu.Unlock()
 }
 
