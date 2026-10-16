@@ -385,8 +385,8 @@ func TestOversizedStylesheetKeepsThePreviousCopy(t *testing.T) {
 	if err := w.refresh(context.Background()); err != nil {
 		t.Fatalf("refresh() error = %v", err)
 	}
-	if css, _, ok := st.CSS(); !ok || !strings.Contains(string(css), "color:red") {
-		t.Fatalf("the first stylesheet did not load: ok=%v css=%q", ok, css)
+	if _, css, _, _ := st.GetWithCSS(); !strings.Contains(string(css), "color:red") {
+		t.Fatalf("the first stylesheet did not load: css=%q", css)
 	}
 
 	// Now the file grows past the limit. The config itself is unchanged.
@@ -395,9 +395,8 @@ func TestOversizedStylesheetKeepsThePreviousCopy(t *testing.T) {
 		t.Fatalf("refresh() error = %v", err)
 	}
 
-	css, _, ok := st.CSS()
-	if !ok || !strings.Contains(string(css), "color:red") {
-		t.Errorf("an oversized stylesheet wiped the live one: ok=%v len=%d", ok, len(css))
+	if _, css, _, _ := st.GetWithCSS(); !strings.Contains(string(css), "color:red") {
+		t.Errorf("an oversized stylesheet wiped the live one: len=%d", len(css))
 	}
 }
 
@@ -418,9 +417,8 @@ func TestFailedStylesheetReadKeepsThePreviousCopy(t *testing.T) {
 		t.Fatalf("refresh() error = %v", err)
 	}
 
-	css, _, ok := st.CSS()
-	if !ok || !strings.Contains(string(css), "color:red") {
-		t.Errorf("a failed read wiped the live stylesheet: ok=%v len=%d", ok, len(css))
+	if _, css, _, _ := st.GetWithCSS(); !strings.Contains(string(css), "color:red") {
+		t.Errorf("a failed read wiped the live stylesheet: len=%d", len(css))
 	}
 }
 
@@ -451,8 +449,8 @@ func TestWarningsReachTheStoreEvenWhenNothingElseChanged(t *testing.T) {
 	if len(warnings) == 0 {
 		t.Fatal("the oversized-stylesheet warning never reached the store")
 	}
-	if css, _, ok := st.CSS(); !ok || !strings.Contains(string(css), "color:red") {
-		t.Errorf("the previous stylesheet should still be in service: ok=%v", ok)
+	if _, css, _, _ := st.GetWithCSS(); !strings.Contains(string(css), "color:red") {
+		t.Errorf("the previous stylesheet should still be in service: css=%q", css)
 	}
 }
 

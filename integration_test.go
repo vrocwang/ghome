@@ -305,8 +305,8 @@ func TestCustomCSSAddedLaterIsPickedUp(t *testing.T) {
 	stack.gitea.set("custom.css", "")
 	stack.push(t)
 	waitFor(t, 6*time.Second, "the config without customCss", func() bool {
-		_, _, ok := stack.store.CSS()
-		return !ok
+		_, css, _, _ := stack.store.GetWithCSS()
+		return css == nil
 	})
 	before := stack.meta(t)
 
@@ -364,7 +364,7 @@ func TestMissingStylesheetDegradesToAWarning(t *testing.T) {
 	waitFor(t, 5*time.Second, "the config to load despite the missing stylesheet", func() bool {
 		return st.Loaded()
 	})
-	if _, _, ok := st.CSS(); ok {
+	if _, css, _, _ := st.GetWithCSS(); css != nil {
 		t.Error("store claims to hold a stylesheet that does not exist")
 	}
 

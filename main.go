@@ -162,8 +162,10 @@ func run() error {
 		// disk I/O, so it goes last; it reads the payload that was just
 		// published rather than the outgoing one.
 		applyConfig(cfg)
-		css, _, _ := st.CSS()
-		saveCache(o.cacheFile, st.Raw(), css, log)
+		// Read as a pair: the cache holds the document and its stylesheet, and
+		// taking them in two reads could pair one revision with the next.
+		raw, css, _, _ := st.RawWithCSS()
+		saveCache(o.cacheFile, raw, css, log)
 	}
 
 	// A config restored from the cache never passed through OnUpdate, so its
@@ -585,16 +587,10 @@ func loadCache(path string, st *store.Store, log *slog.Logger) {
 		return
 	}
 	css, cssRev := loadCachedCSS(path)
-	var loadErr error
-	if css == nil {
-		// No stylesheet was cached. Passing nothing rather than an empty string
-		// is what keeps "this config has no customCss" distinct from "the file
-		// is empty" in the store.
-		loadErr = st.Load(data, "cache:"+filepath.Base(path), "cache")
-	} else {
-		loadErr = st.Load(data, "cache:"+filepath.Base(path), "cache", string(css), cssRev)
-	}
-	if loadErr != nil {
+	// Restored in one publish, stylesheet included. A nil css means the cache
+	// held none -- which stays distinct from "the cached stylesheet is empty",
+	// because the store keys "no stylesheet" off exactly that nil.
+	if loadErr := st.LoadCache(data, "cache:"+filepath.Base(path), "cache", css, cssRev); loadErr != nil {
 		log.Warn("ignoring an unusable cache file", "path", path, "error", loadErr)
 		return
 	}

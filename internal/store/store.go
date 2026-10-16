@@ -79,25 +79,28 @@ func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings [
 	s.notify()
 }
 
-// Load parses raw and publishes it. It is used to seed the store from the cache
-// file and by tests.
+// Load parses raw and publishes it without a stylesheet.
+func (s *Store) Load(raw []byte, rev, src string) error {
+	return s.load(raw, rev, src, nil, "")
+}
+
+// LoadCache parses raw and publishes it together with the stylesheet that was
+// cached next to it, as one publish. That is the point: restoring the config
+// without its styling brought the page back unstyled, which is exactly the
+// outage the cache exists for.
 //
-// css carries the stylesheet cached alongside the config: css[0] is its bytes
-// and css[1] its revision. It is variadic so that seeding a store with a
-// document alone stays the short form. Installing both in one Publish is what
-// keeps a restored store from serving the page with the styling missing.
-func (s *Store) Load(raw []byte, rev, src string, css ...string) error {
+// A nil css means no stylesheet was cached at all.
+func (s *Store) LoadCache(raw []byte, rev, src string, css []byte, cssRev string) error {
+	return s.load(raw, rev, src, css, cssRev)
+}
+
+func (s *Store) load(raw []byte, rev, src string, css []byte, cssRev string) error {
 	cfg, warnings, err := nav.Parse(raw)
 	if err != nil {
 		s.SetError(err)
 		return err
 	}
-	var cssData []byte
-	var cssRev string
-	if len(css) >= 2 {
-		cssData, cssRev = []byte(css[0]), css[1]
-	}
-	s.Publish(cfg, raw, rev, src, warnings, cssData, cssRev)
+	s.Publish(cfg, raw, rev, src, warnings, css, cssRev)
 	return nil
 }
 
@@ -109,23 +112,6 @@ func (s *Store) Get() (nav.Payload, bool) {
 	return s.payload, s.loaded
 }
 
-// Raw returns the exact bytes of the current document, for the cache file.
-func (s *Store) Raw() []byte {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.raw
-}
-
-// CSS returns the stylesheet fetched from the config repository, if any.
-func (s *Store) CSS() ([]byte, string, bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	if s.css == nil {
-		return nil, "", false
-	}
-	return s.css, s.cssRev, true
-}
-
 // Loaded reports whether any document has ever loaded successfully.
 func (s *Store) Loaded() bool {
 	s.mu.RLock()
@@ -133,13 +119,26 @@ func (s *Store) Loaded() bool {
 	return s.loaded
 }
 
+// RawWithCSS returns everything the cache file is written from -- the raw
+// document and its stylesheet -- from one revision, under a single lock.
+//
+// Writing the cache from Raw and GetWithCSS in turn can pair one revision's
+// document with the next revision's stylesheet, which is precisely the state
+// the cache must never restore: the store installs the two together, so the
+// cache has to read them together.
+func (s *Store) RawWithCSS() (raw, css []byte, cssRev string, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.raw, s.css, s.cssRev, s.loaded
+}
+
 // GetWithCSS returns the document and its stylesheet from one revision, under a
 // single lock.
 //
-// Reading them with Get and CSS in turn can mix them: a publish between the two
-// calls hands out one revision's tokens next to the next revision's stylesheet.
-// The document and the stylesheet are installed together, so they have to be
-// read together.
+// Reading them with Get and RawWithCSS in turn can mix them: a publish between
+// the two calls hands out one revision's tokens next to the next revision's
+// stylesheet. The document and the stylesheet are installed together, so they
+// have to be read together.
 func (s *Store) GetWithCSS() (nav.Payload, []byte, string, bool) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()

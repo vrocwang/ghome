@@ -554,17 +554,17 @@ func TestCacheRoundTripKeepsTheStylesheet(t *testing.T) {
 	css := []byte(".link{color:red}\n")
 
 	live := store.New()
-	if err := live.Load(raw, "rev-1", "test", string(css), "css-rev"); err != nil {
-		t.Fatalf("Load() error = %v", err)
+	if err := live.LoadCache(raw, "rev-1", "test", css, "css-rev"); err != nil {
+		t.Fatalf("LoadCache() error = %v", err)
 	}
 	saveCache(path, raw, css, discardLogger())
 
 	restored := store.New()
 	loadCache(path, restored, discardLogger())
 
-	got, rev, ok := restored.CSS()
-	if !ok || !strings.Contains(string(got), "color:red") {
-		t.Fatalf("restored stylesheet: ok=%v rev=%q css=%q", ok, rev, got)
+	_, got, rev, _ := restored.GetWithCSS()
+	if !strings.Contains(string(got), "color:red") {
+		t.Fatalf("restored stylesheet: rev=%q css=%q", rev, got)
 	}
 	payload, ok := restored.Get()
 	if !ok {
@@ -579,7 +579,7 @@ func TestCacheRoundTripKeepsTheStylesheet(t *testing.T) {
 	saveCache(path, raw, nil, discardLogger())
 	empty := store.New()
 	loadCache(path, empty, discardLogger())
-	if _, _, ok := empty.CSS(); ok {
+	if _, css, _, _ := empty.GetWithCSS(); css != nil {
 		t.Error("a cached config without a stylesheet restored one")
 	}
 }

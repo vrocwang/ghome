@@ -312,7 +312,7 @@ func (w *Watcher) fetchExtras(ctx context.Context, cfg *nav.Config) (css []byte,
 	if err != nil {
 		// Keep serving the copy already in the store rather than dropping the
 		// styling over a transient git failure.
-		if prev, prevRev, ok := w.store.CSS(); ok {
+		if _, prev, prevRev, ok := w.store.GetWithCSS(); ok && prev != nil {
 			// Keep styling rather than dropping it over what may be a transient
 			// failure -- but report it. Staying quiet makes a permanently wrong
 			// path indistinguishable from a working one: nav.yaml names one file
@@ -330,7 +330,7 @@ func (w *Watcher) fetchExtras(ctx context.Context, cfg *nav.Config) (css []byte,
 		// to warn, not a reason to strip the styling off a live page. Silently
 		// returning nil here deleted it.
 		warning := fmt.Sprintf("style.customCss: %s exceeds %d bytes, ignored", path, maxCustomCSS)
-		if prev, prevRev, ok := w.store.CSS(); ok {
+		if _, prev, prevRev, ok := w.store.GetWithCSS(); ok && prev != nil {
 			w.log.Warn("keeping the previous custom css", "path", path,
 				"limit", maxCustomCSS, "size", len(snap.Data))
 			return prev, prevRev, []string{warning + "; still serving the previous stylesheet"}
