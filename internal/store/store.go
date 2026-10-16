@@ -47,7 +47,9 @@ func New() *Store {
 	}
 }
 
-// Publish installs an already parsed document as the current one.
+// Publish installs an already parsed document as the current one, and returns
+// what it published, so a caller that logs the reload can report the derived
+// values (ThemeRevision) without reading the store back or recomputing them.
 //
 // The watcher parses and calls this directly, rather than Load, because it has
 // to inspect the config first: style.customCss names a sibling file it must
@@ -55,7 +57,7 @@ func New() *Store {
 //
 // css and cssRev carry the optional stylesheet; pass nil and "" when there is
 // none.
-func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings []string, css []byte, cssRev string) {
+func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings []string, css []byte, cssRev string) nav.Payload {
 	s.mu.Lock()
 	s.raw = raw
 	s.css = css
@@ -72,11 +74,13 @@ func (s *Store) Publish(cfg *nav.Config, raw []byte, rev, src string, warnings [
 			Warnings:      warnings,
 		},
 	}
+	published := s.payload
 	s.loaded = true
 	s.lastErr = nil
 	s.mu.Unlock()
 
 	s.notify()
+	return published
 }
 
 // Load parses raw and publishes it without a stylesheet.

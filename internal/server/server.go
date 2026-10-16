@@ -976,6 +976,21 @@ func (r *statusRecorder) Flush() {
 	}
 }
 
+// uiTrafficPaths are the endpoints the page and its own live updates hit by
+// themselves: one /api/nav + /api/status pair per open tab on every change
+// event, plus the stylesheet on every load. Logging those at info made a single
+// push scroll a busy log past everything that mattered. They still log -- at
+// debug -- so the traffic is there when it is what you are looking for.
+//
+// The endpoints that *cause* something stay at info: /api/webhook,
+// /api/refresh, /healthz (a monitor's probe), and /api/events (a stream opening
+// or closing is a lifecycle event worth seeing).
+var uiTrafficPaths = []string{"/theme.css", "/api/nav", "/api/status"}
+
+// withLogging records one line per request. The level depends on the path and
+// on the outcome: a failure is never filed as noise, because "the page is
+// fetching something automatically" and "the page is fetching something
+// automatically *and it is failing*" are not the same event.
 func (s *Server) withLogging(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -987,13 +1002,14 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 
 		level := slog.LevelInfo
 		switch {
-		case strings.Contains(r.URL.Path, "/assets/"), strings.HasSuffix(r.URL.Path, "/api/icon"):
-			level = slog.LevelDebug // a page load fetches many small files
-		case strings.HasSuffix(r.URL.Path, "/api/events"):
-			// Long lived: duration is the connection lifetime, not latency.
-			level = slog.LevelDebug
 		case rec.status >= 500:
+			// Checked first: a failing request is the one line an operator
+			// must not have to raise the log level to find. This ordering also
+			// fixes the reverse: a 500 on /assets/ used to be demoted to debug
+			// by the path checks below.
 			level = slog.LevelWarn
+		case isUITraffic(r.URL.Path):
+			level = slog.LevelDebug
 		}
 		// Deliberately logs the path only, never the query string: /api/icon
 		// carries a configured link URL, which may hold a token.
@@ -1005,6 +1021,33 @@ func (s *Server) withLogging(next http.Handler) http.Handler {
 			"duration", time.Since(start).Round(time.Millisecond),
 			"remote", clientIP(r))
 	})
+}
+
+// isUITraffic reports whether a request is the UI fetching for itself.
+//
+// Suffixes rather than equality for the named endpoints, because every route is
+// also served under an optional --base-path prefix. The page itself is the
+// directory root, which is "/" at the site root and "/nav/" under a prefix:
+// a path with nothing but a trailing slash.
+func isUITraffic(path string) bool {
+	if strings.Contains(path, "/assets/") || strings.HasSuffix(path, "/api/icon") ||
+		strings.HasSuffix(path, "/api/events") || isDirectoryRoot(path) {
+		return true
+	}
+	for _, p := range uiTrafficPaths {
+		if strings.HasSuffix(path, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDirectoryRoot reports whether path names a directory rather than a file:
+// "/" or "/nav/". A path with anything other than slashes after the last slash
+// is a request for something that does not exist in a single page UI, and is
+// worth a line at info.
+func isDirectoryRoot(path string) bool {
+	return path != "" && strings.Trim(path, "/") == ""
 }
 
 // round1 keeps the reported memory figures readable in JSON.

@@ -381,6 +381,16 @@ ghome --icon-dir=/var/lib/ghome/icons
 HTTP 接口（含 `/healthz` 的完整返回）见 [`docs/http-api.md`](docs/http-api.md)。日常只有两个会手敲：
 `GET /healthz` 看状态，`POST /api/refresh` 手动触发重载（需要 `--admin-token`）。
 
+**日志里会看到什么。** `info`（默认）只报"有事发生"：`navigation config loaded`（带
+`revision` 与 `theme_revision` 两个修订号）、webhook 与手动重载、状态探测的变化、以及
+`/healthz`、`/api/webhook`、`/api/refresh` 这几个会**引起**什么的请求。页面自己为了刷新而发的
+那一批——`/`、`/theme.css`、`/api/nav`、`/api/status`、`/assets/`、`/api/icon`——都是 `debug`：
+一次变更会让每个开着的标签页各拉一遍 `/api/nav` 与 `/api/status`，放在 `info` 会把真正重要的行
+冲掉。失败的请求（5xx）无论什么路径都记 `warn`，要看那些自动请求就 `--log-level=debug`。
+
+**只改了 `custom.css` 时，`revision` 不会变**——它是 `nav.yaml` 的文件修订号，样式表动不了它。
+认这次改动看 `theme_revision`（它同时覆盖两份文件），或者 `curl /healthz | grep themeRevision`。
+
 ---
 
 ## 排障

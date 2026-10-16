@@ -274,14 +274,20 @@ func (w *Watcher) refresh(ctx context.Context) error {
 		return nil
 	}
 
-	w.store.Publish(cfg, snap.Data, snap.Rev, w.src.Describe(), warnings, css, cssRev)
+	published := w.store.Publish(cfg, snap.Data, snap.Rev, w.src.Describe(), warnings, css, cssRev)
 	w.fingerprint = fingerprint
 
 	for _, warning := range warnings {
 		w.log.Warn("config warning", "detail", warning)
 	}
+	// theme_revision covers the document *and* custom.css, and is what a browser
+	// keys its copy of /theme.css on. Logging only the document revision left a
+	// push that touched nothing but the stylesheet with no line in the log that
+	// corresponded to it: revision was identical to the last reload, and an
+	// operator editing custom.css had no way to see that it had been picked up.
 	w.log.Info("navigation config loaded",
 		"revision", snap.Rev,
+		"theme_revision", published.Meta.ThemeRevision,
 		"source", w.src.Describe(),
 		"groups", len(cfg.Groups),
 		"links", cfg.LinkCount(),

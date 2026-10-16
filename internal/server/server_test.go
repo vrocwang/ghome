@@ -996,6 +996,110 @@ func TestIconRequestIsNotLoggedWithItsQueryString(t *testing.T) {
 	}
 }
 
+// One change event makes every open tab fetch /api/nav and /api/status for
+// itself, so those lines at info buried the ones that report a cause. They are
+// still logged, at debug. The endpoints that *cause* something stay at info.
+func TestAccessLogLevelFollowsThePath(t *testing.T) {
+	cases := []struct {
+		name       string
+		method     string
+		path       string
+		adminToken string
+		want       slog.Level
+	}{
+		{"the page", http.MethodGet, "/", "", slog.LevelDebug},
+		{"the stylesheet", http.MethodGet, "/theme.css", "", slog.LevelDebug},
+		{"the config a tab re-reads", http.MethodGet, "/api/nav", "", slog.LevelDebug},
+		{"the status a tab re-reads", http.MethodGet, "/api/status", "", slog.LevelDebug},
+		{"an asset", http.MethodGet, "/assets/app.js", "", slog.LevelDebug},
+		{"an icon", http.MethodGet, "/api/icon?h=git.example.com", "", slog.LevelDebug},
+		{"a webhook", http.MethodPost, "/api/webhook", "", slog.LevelInfo},
+		{"a manual refresh", http.MethodPost, "/api/refresh", "secret", slog.LevelInfo},
+		{"a health probe", http.MethodGet, "/healthz", "", slog.LevelInfo},
+		{"a missing path", http.MethodGet, "/nope", "", slog.LevelInfo},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			logged, level := captureAccessLog(t)
+
+			srv, _ := newTestServer(t, Options{
+				Logger:     logged,
+				AdminToken: "secret",
+				Icons:      &fakeIcons{ok: false},
+			})
+			req := httptest.NewRequest(tc.method, tc.path, strings.NewReader("{}"))
+			if tc.adminToken != "" {
+				req.Header.Set("Authorization", "Bearer "+tc.adminToken)
+			}
+			srv.ServeHTTP(httptest.NewRecorder(), req)
+
+			if got := level(); got != tc.want {
+				t.Errorf("%s %s logged at %s, want %s", tc.method, tc.path, got, tc.want)
+			}
+		})
+	}
+}
+
+// A request that failed must never be filed as noise, whatever its path: "the
+// page is fetching a stylesheet automatically" and "the page is fetching a
+// stylesheet automatically *and it is failing*" are not the same event. No
+// route in the tree can be made to return a 500 on demand, so this drives the
+// middleware directly.
+func TestAccessLogKeepsAFailureOnAQuietPath(t *testing.T) {
+	logged, level := captureAccessLog(t)
+	srv, err := New(Options{Store: testStore(t), Logger: logged})
+	if err != nil {
+		t.Fatalf("New() error = %v", err)
+	}
+
+	failing := srv.withLogging(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "boom", http.StatusInternalServerError)
+	}))
+	// An asset URL: the path check on its own would call this quiet traffic.
+	failing.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/assets/app.js", nil))
+
+	if got := level(); got != slog.LevelWarn {
+		t.Errorf("a 500 on a UI path logged at %s, want %s", got, slog.LevelWarn)
+	}
+}
+
+// captureAccessLog returns a logger that records to nothing and the level of the
+// last "http request" line it was handed, so a test can assert on the policy
+// without parsing the whole record.
+func captureAccessLog(t *testing.T) (*slog.Logger, func() slog.Level) {
+	t.Helper()
+	var (
+		got  slog.Level
+		seen bool
+	)
+	logger := slog.New(slog.NewTextHandler(writerFunc(func(p []byte) (int, error) {
+		text := string(p)
+		if !strings.Contains(text, "msg=\"http request\"") {
+			return len(p), nil
+		}
+		switch {
+		case strings.Contains(text, "level=DEBUG"):
+			got = slog.LevelDebug
+		case strings.Contains(text, "level=INFO"):
+			got = slog.LevelInfo
+		case strings.Contains(text, "level=WARN"):
+			got = slog.LevelWarn
+		default:
+			t.Errorf("unexpected level in %s", text)
+		}
+		seen = true
+		return len(p), nil
+	}), &slog.HandlerOptions{Level: slog.LevelDebug}))
+
+	return logger, func() slog.Level {
+		if !seen {
+			t.Fatal("no access log line was written")
+		}
+		return got
+	}
+}
+
 // writerFunc adapts a function to io.Writer for the log capture above.
 type writerFunc func([]byte) (int, error)
 
