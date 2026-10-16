@@ -15,7 +15,7 @@
 | webhook 报 202 但没更新 | 这次推送没有改动 nav.yaml 或 custom.css（重载照常发生，内容指纹相同就停在那里）；或 webhook 根本没投递到 | 日志里的 `config unchanged` 是前者；后者去 git 服务器的钩子"最近投递"看记录——若那边配了 Branch Filter，被它挡掉的投递对 ghome 完全不可见 |
 | 以为自己在跑 Gitea，其实是 Forgejo | `/api/v1/version` 报的 `16.0.5+gitea-1.22.0` 里，`+gitea-` 后是**兼容的 Gitea API 版本** | `curl 你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或日志里的 `config warning`（无鉴权的 `/healthz` 不带告警） |
-| 改了颜色但页面没变 | 多半是 ghome 还没察觉这次推送，其次才轮到浏览器缓存 | `navigation config loaded` 那行的 `theme_revision` 有没有变（它覆盖 nav.yaml 与 custom.css；只改样式表时 `revision` 不会动，这点常被误判成"没生效"）；`/theme.css` 末端会写明 custom.css 的版本哈希 |
+| 改了颜色但页面没变 | 多半是 ghome 还没察觉这次推送，其次才轮到浏览器缓存 | 看 `config reloaded: custom.css` 有没有出现（改样式表时这一行直接点出文件名）；要看修订号就 `curl /healthz \| grep themeRevision`，或用 `--log-level=debug`，`/theme.css` 末端也写着 custom.css 的版本哈希 |
 | 切换主题几乎没变化 | 旧版本把 `style:` 里的颜色同时发给浅色和深色，深色被浅色值盖掉 | 升级即可；想自定义深色用 `style.dark`，没写的键沿用内置深色值 |
 | 想改样式又不想装 Go | 不需要装 | 用 `style:` 令牌或 `custom.css`；要动结构才用 `--dump-web` + `--web-dir` |
 

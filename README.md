@@ -381,15 +381,26 @@ ghome --icon-dir=/var/lib/ghome/icons
 HTTP 接口（含 `/healthz` 的完整返回）见 [`docs/http-api.md`](docs/http-api.md)。日常只有两个会手敲：
 `GET /healthz` 看状态，`POST /api/refresh` 手动触发重载（需要 `--admin-token`）。
 
-**日志里会看到什么。** `info`（默认）只报"有事发生"：`navigation config loaded`（带
-`revision` 与 `theme_revision` 两个修订号）、webhook 与手动重载、状态探测的变化、以及
-`/healthz`、`/api/webhook`、`/api/refresh` 这几个会**引起**什么的请求。页面自己为了刷新而发的
-那一批——`/`、`/theme.css`、`/api/nav`、`/api/status`、`/assets/`、`/api/icon`——都是 `debug`：
-一次变更会让每个开着的标签页各拉一遍 `/api/nav` 与 `/api/status`，放在 `info` 会把真正重要的行
-冲掉。失败的请求（5xx）无论什么路径都记 `warn`，要看那些自动请求就 `--log-level=debug`。
+**日志里会看到什么。** `info`（默认）只报"有事发生"，而且**直接说是哪个文件变了**：
 
-**只改了 `custom.css` 时，`revision` 不会变**——它是 `nav.yaml` 的文件修订号，样式表动不了它。
-认这次改动看 `theme_revision`（它同时覆盖两份文件），或者 `curl /healthz | grep themeRevision`。
+```text
+INFO config reloaded: custom.css        groups=56 links=573 warnings=0
+INFO config reloaded: nav.yaml          groups=56 links=573 warnings=0
+INFO config reloaded: nav.yaml, custom.css  …
+```
+
+文件名取自配置（`--forge-path` / `--file` 的基名，以及 `style.customCss`），不是完整路径；进程
+第一次加载没有"上一次"可比，所以两个文件名都会列出来，之后按实际改动报。
+
+另外 `info` 还有：webhook 与手动重载、状态探测的变化，以及 `/healthz`、`/api/webhook`、
+`/api/refresh` 这几个会**引起**什么的请求。页面自己为了刷新而发的那一批——`/`、`/theme.css`、
+`/api/nav`、`/api/status`、`/assets/`、`/api/icon`——都是 `debug`：一次变更会让每个开着的
+标签页各拉一遍 `/api/nav` 与 `/api/status`，放在 `info` 会把真正重要的行冲掉。失败的请求
+（5xx）无论什么路径都记 `warn`。
+
+**修订号在 `debug`**：`config revision details` 那行带 `revision`（`nav.yaml` 的文件修订号）与
+`theme_revision`（同时覆盖两份文件的合成修订号），用来确认"线上跑的是哪个提交"。日常读日志看
+`config reloaded: <文件名>` 就够了，`curl /healthz | grep revision` 也能拿到这两个值。
 
 ---
 

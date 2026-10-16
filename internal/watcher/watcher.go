@@ -45,6 +45,14 @@ type Watcher struct {
 	// so a change to either one reloads the page.
 	fingerprint string
 
+	// lastNavRev and lastCSSRev are the revisions of the last publish, kept only
+	// so the reload log can say which file moved. A reload publishes for reasons
+	// a revision cannot express (a changed warning, the first load), so they are
+	// a courtesy to the operator rather than a control signal: the fingerprint
+	// above is what decides whether anything is published at all.
+	lastNavRev string
+	lastCSSRev string
+
 	// OnUpdate, when set, is called with the freshly published config. It is
 	// the single hook that keeps derived state in step: the on-disk cache, the
 	// icon allow-list and the set of URLs to health probe.
@@ -227,6 +235,69 @@ func (w *Watcher) sleep(ctx context.Context, d time.Duration) (kicked bool, ok b
 	}
 }
 
+// changedFiles names the files this reload picked up, for the log line an
+// operator reads after a push: "config reloaded: custom.css" says what happened,
+// where a blob SHA only says that something did.
+//
+// The names are the configured short ones (nav.yaml, custom.css) rather than
+// paths, because that is how they are written in nav.yaml and how the operator
+// thinks of them. cssPath is the stylesheet the config being loaded names, not
+// the one still in the store: a reload can be the one that introduces it.
+//
+// It compares against lastNavRev and lastCSSRev and changes nothing, so the
+// caller owns the state it reads -- reporting on a reload must not be what
+// decides what the next reload is compared against.
+func (w *Watcher) changedFiles(navRev, cssRev, cssPath string) string {
+	docName := w.docName()
+	cssName := baseName(cssPath)
+
+	// A process that has never published has nothing to compare against: report
+	// both files rather than claim only one of them was touched.
+	if w.fingerprint == "" {
+		names := []string{docName}
+		if cssName != "" {
+			names = append(names, cssName)
+		}
+		return strings.Join(names, ", ")
+	}
+
+	var changed []string
+	if navRev != w.lastNavRev {
+		changed = append(changed, docName)
+	}
+	if cssRev != w.lastCSSRev && cssName != "" {
+		changed = append(changed, cssName)
+	}
+	if len(changed) == 0 {
+		// Published for a reason no revision can show: a warning appeared or
+		// went away while both files stayed as they were.
+		return "warnings changed"
+	}
+	return strings.Join(changed, ", ")
+}
+
+// docName is the configured name of the navigation document: "nav.yaml" inside
+// the repository, or the base name of the path in file mode.
+func (w *Watcher) docName() string {
+	if multi, ok := w.src.(source.MultiFile); ok {
+		if name := baseName(multi.NavPath()); name != "" {
+			return name
+		}
+	}
+	return "nav.yaml"
+}
+
+func baseName(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "" {
+		return ""
+	}
+	if i := strings.LastIndexByte(p, '/'); i >= 0 {
+		return p[i+1:]
+	}
+	return p
+}
+
 // fingerprintOf is the change marker the early return compares. It covers the
 // document revision, the stylesheet revision and the warnings, so exactly one
 // publish happens per real change and none per poll. Warnings are ordered
@@ -275,23 +346,31 @@ func (w *Watcher) refresh(ctx context.Context) error {
 	}
 
 	published := w.store.Publish(cfg, snap.Data, snap.Rev, w.src.Describe(), warnings, css, cssRev)
+
+	// Both of these read the state the previous reload left behind, so they run
+	// before this one overwrites it.
+	changed := w.changedFiles(snap.Rev, cssRev, cfg.Style.CustomCSS)
 	w.fingerprint = fingerprint
+	w.lastNavRev, w.lastCSSRev = snap.Rev, cssRev
 
 	for _, warning := range warnings {
 		w.log.Warn("config warning", "detail", warning)
 	}
-	// theme_revision covers the document *and* custom.css, and is what a browser
-	// keys its copy of /theme.css on. Logging only the document revision left a
-	// push that touched nothing but the stylesheet with no line in the log that
-	// corresponded to it: revision was identical to the last reload, and an
-	// operator editing custom.css had no way to see that it had been picked up.
-	w.log.Info("navigation config loaded",
-		"revision", snap.Rev,
-		"theme_revision", published.Meta.ThemeRevision,
-		"source", w.src.Describe(),
+	// The info line names the file that changed, because that is the question an
+	// operator has after a push. The revisions answer a different one -- "which
+	// commit is live" -- and a blob SHA never said which file had moved anyway:
+	// a push that touched only custom.css left the document revision identical
+	// to the previous reload, so the line looked like nothing had happened.
+	w.log.Info("config reloaded: "+changed,
 		"groups", len(cfg.Groups),
 		"links", cfg.LinkCount(),
 		"warnings", len(warnings))
+	// The identifiers stay, one level down: this is the line to ask for when the
+	// question is "is the running binary serving the commit I just pushed".
+	w.log.Debug("config revision details",
+		"revision", snap.Rev,
+		"theme_revision", published.Meta.ThemeRevision,
+		"source", w.src.Describe())
 
 	if w.OnUpdate != nil {
 		w.OnUpdate(cfg)

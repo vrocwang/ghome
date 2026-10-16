@@ -133,6 +133,10 @@ func (g *Gitea) Describe() string {
 	return fmt.Sprintf("%s:%s/%s/%s@%s", g.kind, g.owner, g.repo, g.path, g.ref)
 }
 
+// NavPath names the configured document inside the repository, as MultiFile
+// requires.
+func (g *Gitea) NavPath() string { return g.path }
+
 // contentsResponse is the subset of GET /contents/{path} we care about.
 type contentsResponse struct {
 	Name     string `json:"name"`

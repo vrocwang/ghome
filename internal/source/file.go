@@ -39,6 +39,9 @@ func NewFile(path string) (*File, error) {
 
 func (f *File) Describe() string { return "file:" + f.path }
 
+// NavPath names the configured document, as MultiFile requires.
+func (f *File) NavPath() string { return f.path }
+
 func (f *File) Fetch(ctx context.Context) (Snapshot, error) {
 	return f.read(ctx, f.path)
 }

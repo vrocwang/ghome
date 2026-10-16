@@ -35,6 +35,10 @@ type MultiFile interface {
 	// source). Implementations must refuse to escape the repository or the
 	// directory respectively.
 	FetchPath(ctx context.Context, path string) (Snapshot, error)
+	// NavPath names the configured document: repository-relative for the forge
+	// source, absolute for the file source. It is for logs -- "which file did
+	// this reload pick up" -- and never for addressing a file.
+	NavPath() string
 }
 
 // SafeRelativePath rejects absolute paths and parent-directory traversal, so a

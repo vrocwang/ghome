@@ -351,6 +351,51 @@ func TestRunRecoversQuicklyAfterAFailure(t *testing.T) {
 	waitFor(t, 4*time.Second, "recovery", func() bool { return st.Loaded() })
 }
 
+// TestChangedFilesNamesWhatMoved pins the log line an operator reads after a
+// push. A revision cannot answer it: a stylesheet-only push leaves the document
+// revision identical, so the reload used to look like nothing had happened.
+func TestChangedFilesNamesWhatMoved(t *testing.T) {
+	src := &multiSource{css: []byte(".link{color:red}\n")}
+	src.set(docWithCSS, "rev-a")
+	st := store.New()
+	w := New(src, st, time.Minute, discardLogger())
+
+	// A process that has not published yet has no previous revision to compare
+	// against, so it reports every file the config has.
+	if got := w.changedFiles("rev-a", "css-rev", "custom.css"); got != "nav.yaml, custom.css" {
+		t.Errorf("the first load reported %q, want both files", got)
+	}
+
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	// Nothing moved and no warning changed, so this refresh published the first
+	// load; the next report is compared against it.
+	if got := w.changedFiles("rev-a", "css-rev", "custom.css"); got != "warnings changed" {
+		t.Errorf("an unchanged reload reported %q", got)
+	}
+
+	// Same document, new stylesheet revision: the case that used to be invisible.
+	if got := w.changedFiles("rev-a", "css-rev-2", "custom.css"); got != "custom.css" {
+		t.Errorf("a stylesheet-only push reported %q, want custom.css", got)
+	}
+
+	// Same stylesheet, new document.
+	if got := w.changedFiles("rev-b", "css-rev", "custom.css"); got != "nav.yaml" {
+		t.Errorf("a document-only push reported %q, want nav.yaml", got)
+	}
+
+	// Both.
+	if got := w.changedFiles("rev-b", "css-rev-2", "custom.css"); got != "nav.yaml, custom.css" {
+		t.Errorf("a push touching both reported %q", got)
+	}
+
+	// A config that names no stylesheet never blames one.
+	if got := w.changedFiles("rev-b", "", ""); got != "nav.yaml" {
+		t.Errorf("a config without customCss reported %q, want nav.yaml", got)
+	}
+}
+
 // multiSource is a fakeSource that can also read sibling files, which is what
 // style.customCss needs.
 type multiSource struct {
@@ -370,6 +415,8 @@ func (m *multiSource) FetchPath(context.Context, string) (source.Snapshot, error
 }
 
 func (m *multiSource) setCSS(css []byte) { m.css = css }
+
+func (m *multiSource) NavPath() string { return "nav.yaml" }
 
 const docWithCSS = "style:\n  customCss: \"custom.css\"\ngroups:\n  - name: A\n    links:\n      - name: One\n        url: https://one.example.com\n"
 
