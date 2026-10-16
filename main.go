@@ -88,7 +88,10 @@ func run() error {
 		return nil
 	}
 
-	log := newLogger(o.logLevel)
+	log, err := newLogger(o.logLevel)
+	if err != nil {
+		return err
+	}
 
 	src, err := buildSource(o)
 	if err != nil {
@@ -429,8 +432,8 @@ func parseFlags() options {
 	fs.StringVar(&o.iconDir, "icon-dir", env("GHOME_ICON_DIR", ""),
 		"directory of local icon files named <host>.png/.svg/.ico, used before fetching a site")
 	fs.StringVar(&o.iconFetch, "icon-fetch", env("GHOME_ICON_FETCH", "auto"),
-		"auto fetches <host>/favicon.ico when a host has no local file; off never "+
-			"fetches, so every link without one falls back to a generated letter avatar")
+		"auto fetches <host>/favicon.ico when a host has no local file; off (or none) "+
+			"never fetches, so every link without one falls back to a generated letter avatar")
 	fs.StringVar(&o.logLevel, "log-level", env("GHOME_LOG_LEVEL", "info"),
 		"log level: debug, info, warn or error")
 	fs.BoolVar(&o.healthcheck, "healthcheck", false,
@@ -546,19 +549,25 @@ func buildSource(o options) (source.Source, error) {
 	}
 }
 
-func newLogger(level string) *slog.Logger {
+// newLogger rejects an unknown level instead of quietly logging at info: every
+// other enum-valued flag (--source, --icon-fetch) fails at startup for the same
+// reason, and a typo that silently changes how much you can see is the kind of
+// thing you only notice while debugging something else.
+func newLogger(level string) (*slog.Logger, error) {
 	var lvl slog.Level
 	switch strings.ToLower(strings.TrimSpace(level)) {
 	case "debug":
 		lvl = slog.LevelDebug
+	case "info":
+		lvl = slog.LevelInfo
 	case "warn", "warning":
 		lvl = slog.LevelWarn
 	case "error":
 		lvl = slog.LevelError
 	default:
-		lvl = slog.LevelInfo
+		return nil, fmt.Errorf("unknown --log-level %q: expected debug, info, warn or error", level)
 	}
-	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl}))
+	return slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: lvl})), nil
 }
 
 // loadCache seeds the store from the last good config so a restart while git is

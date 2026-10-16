@@ -401,6 +401,11 @@ func (r *Resolver) download(ctx context.Context, iconURL *url.URL) (Icon, error)
 	if err != nil {
 		return Icon{}, err
 	}
+	// Closing is not optional even though the body looks like it is about to be
+	// read to the end: an oversized icon stops at the cap without reaching EOF,
+	// and an abandoned body keeps its connection out of the pool. Every such
+	// host would then leak a socket per fetch.
+	defer func() { _ = resp.Body.Close() }()
 
 	// One byte past the cap so an oversized body is rejected instead of being
 	// silently cached as a truncated image.
@@ -445,7 +450,9 @@ func (r *Resolver) hasLocal(host string) bool {
 		return false
 	}
 	for _, ext := range localExts {
-		if info, err := os.Stat(filepath.Join(r.opts.Dir, host+ext)); err == nil && !info.IsDir() {
+		// Size matters: local() refuses a zero-byte file, so treating one as
+		// "handled locally" would leave the host with no icon and no fetch.
+		if info, err := os.Stat(filepath.Join(r.opts.Dir, host+ext)); err == nil && !info.IsDir() && info.Size() > 0 {
 			return true
 		}
 	}
@@ -684,12 +691,28 @@ func (g *flightGroup) do(key string, fn func() (Icon, bool)) (Icon, bool) {
 	g.calls[key] = c
 	g.mu.Unlock()
 
+	// The cleanup is deferred because a panic in fn used to leave the entry in
+	// the map with its channel never closed: every later lookup of the same key
+	// -- which is an allowed host, so it is reachable from a browser -- would
+	// then block forever on <-c.done instead of failing once.
+	defer func() {
+		if r := recover(); r != nil {
+			g.mu.Lock()
+			delete(g.calls, key)
+			g.mu.Unlock()
+			close(c.done)
+			panic(r)
+		}
+	}()
+
 	c.icon, c.ok = fn()
-	close(c.done)
 
 	g.mu.Lock()
 	delete(g.calls, key)
 	g.mu.Unlock()
+	// Closed after the result is published and the entry is gone, so a waiter
+	// that wakes up sees a complete result.
+	close(c.done)
 
 	return c.icon, c.ok
 }

@@ -457,14 +457,16 @@ style:
 			t.Errorf("theme.css is missing %q\n%s", want, body)
 		}
 	}
-	// A light colour must not be repeated for dark mode: doing that erased every
-	// colour the config named and left the theme toggle looking broken. So the
-	// dark blocks may exist (cardStyle states a shadow for both themes) but none
-	// of the light colours may appear in one.
-	for _, block := range blocksFor(body, `:root[data-theme="dark"]`) {
-		if strings.Contains(block, "--accent") || strings.Contains(block, "--radius") {
-			t.Errorf("a light colour leaked into a dark block:\n%s", block)
-		}
+	// Nothing generated may carry a dark selector: such a rule would outrank the
+	// bare :root of a custom.css the operator appends after this file, so their
+	// dark colour or shadow would silently lose. Dark values ride on --dark-*
+	// names under plain :root instead, and the built-in stylesheet picks them up.
+	if strings.Contains(body, `[data-theme="dark"]`) {
+		t.Errorf("the generated stylesheet must not carry a dark selector:\n%s", body)
+	}
+	if !strings.Contains(body, `:root {
+`) {
+		t.Errorf("expected a plain :root block:\n%s", body)
 	}
 }
 
@@ -474,9 +476,9 @@ style:
 // the page went dark.
 func TestCardStyleStatesBothThemes(t *testing.T) {
 	cases := map[string]struct{ light, dark string }{
-		"flat":   {"none", "none"},
-		"soft":   {"0 1px 2px rgba(16,24,40,.05)", "0 1px 2px rgba(0,0,0,.45)"},
-		"strong": {"0 6px 24px rgba(16,24,40,.12)", "0 6px 24px rgba(0,0,0,.55)"},
+		"flat":   {"none", ""},
+		"soft":   {"0 1px 2px rgba(16,24,40,.05)", ""},
+		"strong": {"0 6px 24px rgba(16,24,40,.12)", ""},
 	}
 	for cardStyle, want := range cases {
 		t.Run(cardStyle, func(t *testing.T) {
@@ -485,15 +487,55 @@ func TestCardStyleStatesBothThemes(t *testing.T) {
 			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/theme.css", nil))
 			body := rec.Body.String()
 
-			light := blockFor(t, body, ":root {")
-			if !strings.Contains(light, "--card-shadow: "+want.light+";") {
-				t.Errorf("light --card-shadow, want %q:\n%s", want.light, light)
+			// Both themes, one value: a preset has to survive dark mode (flat
+			// used to come back with the built-in dark shadow) and also stay
+			// overridable from a custom.css, which a --dark-* resolver rule
+			// would have prevented.
+			if !strings.Contains(body, "--card-shadow: "+want.light+";") {
+				t.Errorf("--card-shadow, want %q:\n%s", want.light, body)
 			}
-			dark := blockFor(t, body, `:root[data-theme="dark"] {`)
-			if !strings.Contains(dark, "--card-shadow: "+want.dark+";") {
-				t.Errorf("dark --card-shadow, want %q (the built-in dark shadow wins otherwise):\n%s", want.dark, dark)
+			if strings.Contains(body, "--dark-card-shadow") {
+				t.Errorf("a preset must not park its shadow on a --dark-* name:\n%s", body)
 			}
 		})
+	}
+}
+
+// The generated dark values only work because the built-in stylesheet consumes
+// them. Pin that contract: the two files are written apart but have to agree on
+// the --dark-* names and on their fallbacks.
+func TestBuiltInStylesheetResolvesGeneratedDarkValues(t *testing.T) {
+	css, err := os.ReadFile("web/assets/style.css")
+	if err != nil {
+		t.Fatalf("read %s: %v", "web/assets/style.css", err)
+	}
+	body := string(css)
+	// The last one, not the first: the built-in palette declares the same
+	// selector earlier, and it is the appended resolver that has to name every
+	// --dark-* it consumes.
+	blocks := blocksFor(body, `:root[data-theme="dark"] {`)
+	if len(blocks) == 0 {
+		t.Fatal("style.css has no dark block at all")
+	}
+	dark := blocks[len(blocks)-1]
+	for _, want := range []string{
+		"--bg: var(--dark-bg, #0d0f13);",
+		"--surface: var(--dark-surface, #171a20);",
+		"--text: var(--dark-text, #e8eaee);",
+		"--muted: var(--dark-muted, #99a2b1);",
+		"--border: var(--dark-border, #272c35);",
+		"--accent: var(--dark-accent, #6f95ff);",
+	} {
+		if !strings.Contains(dark, want) {
+			t.Errorf("style.css is missing %q; a colour set in style.dark would be ignored", want)
+		}
+	}
+	if strings.Contains(dark, "--card-shadow") {
+		t.Error("style.css sets a shadow under the dark selector, which outranks a custom.css shadow")
+	}
+	lightOnly := blockFor(t, body, ":root {")
+	if !strings.Contains(lightOnly, "--card-shadow:") {
+		t.Error("style.css does not declare --card-shadow on :root; the fallback look is gone")
 	}
 }
 
@@ -517,25 +559,22 @@ style:
 	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/theme.css", nil))
 	body := rec.Body.String()
 
-	light := blockFor(t, body, ":root {")
-	if !strings.Contains(light, "--accent: #ff6600;") || !strings.Contains(light, "--bg: #ffffff;") {
-		t.Errorf("light block is missing its colours:\n%s", light)
+	if !strings.Contains(body, "--accent: #ff6600;") || !strings.Contains(body, "--bg: #ffffff;") {
+		t.Errorf("the light colours are missing:\n%s", body)
 	}
-	dark := blockFor(t, body, `:root[data-theme="dark"] {`)
-	for _, want := range []string{"--accent: #ffb066;", "--surface: #101216;"} {
-		if !strings.Contains(dark, want) {
-			t.Errorf("dark block is missing %q:\n%s", want, dark)
-		}
+	if !strings.Contains(body, "--dark-accent: #ffb066;") || !strings.Contains(body, "--dark-surface: #101216;") {
+		t.Errorf("the dark overrides are missing:\n%s", body)
 	}
-	// --bg was set for light only, so the built-in dark background must win.
-	if strings.Contains(dark, "--bg:") {
-		t.Errorf("dark block repeated a light-only colour:\n%s", dark)
+	// --bg was set for light only, so no dark counterpart may exist: the built-in
+	// dark background has to win.
+	if strings.Contains(body, "--dark-bg:") {
+		t.Errorf("a light-only colour got a dark counterpart:\n%s", body)
 	}
 	// Geometry and typography are the same in both themes: a dark-only radius
 	// would be a surprise rather than a feature, so style.dark.radius is not a
 	// colour token and never reaches the stylesheet.
-	if strings.Contains(dark, "--radius") {
-		t.Errorf("dark block carried a non-colour token:\n%s", dark)
+	if strings.Contains(body, "--dark-radius") {
+		t.Errorf("style.dark.radius became a colour token:\n%s", body)
 	}
 	if strings.Contains(body, "--radius: 30px;") {
 		t.Errorf("style.dark.radius was applied as a colour:\n%s", body)
@@ -1093,5 +1132,54 @@ groups:
 	// The same host reached by a different port must resolve to the first link.
 	if got := idx["nas"]; got != "http://nas:8080/" {
 		t.Errorf("hostIndex[nas] = %q, want the first configured url on that host", got)
+	}
+}
+
+// Only a push can change the config. Other events on the same hook are answered
+// 202 "ignored" rather than triggering a reload, and a missing event name is
+// still honoured: an unknown payload is no reason to skip a possible update.
+func TestWebhookOnlyReloadsOnPush(t *testing.T) {
+	cases := []struct {
+		event  string
+		reload bool
+		status int
+	}{
+		{"push", true, http.StatusAccepted},
+		{"Push", true, http.StatusAccepted},
+		{"", true, http.StatusAccepted},
+		{"issues", false, http.StatusAccepted},
+		{"release", false, http.StatusAccepted},
+		{"pull_request", false, http.StatusAccepted},
+	}
+	for _, tc := range cases {
+		srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
+		headers := map[string]string{"X-Gitea-Signature": sign(t, pushMain, "s3cret")}
+		if tc.event != "" {
+			headers["X-Gitea-Event"] = tc.event
+		}
+		rec := postWebhook(t, srv, pushMain, headers)
+		if rec.Code != tc.status {
+			t.Errorf("event %q: status = %d, want %d", tc.event, rec.Code, tc.status)
+		}
+		reloaded := counter.n == 1
+		if reloaded != tc.reload {
+			t.Errorf("event %q: reloaded = %v, want %v (body %s)", tc.event, reloaded, tc.reload, rec.Body)
+		}
+	}
+}
+
+// The ping Gitea sends when a hook is created is answered, not acted on.
+func TestWebhookAnswersPingWithoutReloading(t *testing.T) {
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
+	body := `{"zen":"ghome"}`
+	rec := postWebhook(t, srv, body, map[string]string{
+		"X-Gitea-Event":     "ping",
+		"X-Gitea-Signature": sign(t, body, "s3cret"),
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", rec.Code)
+	}
+	if counter.n != 0 {
+		t.Errorf("a ping triggered %d reloads, want 0", counter.n)
 	}
 }

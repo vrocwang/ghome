@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -46,12 +47,13 @@ type site struct {
 
 	mu    sync.Mutex
 	paths []string
+	conns map[net.Conn]struct{}
 }
 
 func newSite(t *testing.T, routes map[string]http.HandlerFunc) *site {
 	t.Helper()
 
-	s := &site{}
+	s := &site{conns: map[net.Conn]struct{}{}}
 	mux := http.NewServeMux()
 	for pattern, h := range routes {
 		handler := h
@@ -60,9 +62,35 @@ func newSite(t *testing.T, routes map[string]http.HandlerFunc) *site {
 			handler(w, r)
 		})
 	}
-	s.Server = httptest.NewServer(mux)
+	// Recording connections is what makes a leaked response body visible: a
+	// client that never closes the body cannot reuse its connection, so the
+	// server sees a new one per request. The hook has to be in place before
+	// Start, or the server's own goroutine races with this write.
+	s.Server = httptest.NewUnstartedServer(mux)
+	s.Server.Config.ConnState = func(c net.Conn, state http.ConnState) {
+		switch state {
+		case http.StateNew:
+			s.mu.Lock()
+			s.conns[c] = struct{}{}
+			s.mu.Unlock()
+		case http.StateClosed, http.StateHijacked:
+			s.mu.Lock()
+			delete(s.conns, c)
+			s.mu.Unlock()
+		}
+	}
+	s.Server.Start()
 	t.Cleanup(s.Server.Close)
 	return s
+}
+
+// liveConns is how many connections the server currently holds open. A client
+// that reads a body to the end lets the transport recycle it; one that abandons
+// it mid-body cannot, and every request then shows up as another connection.
+func (s *site) liveConns() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.conns)
 }
 
 func (s *site) record(path string) {
@@ -903,5 +931,70 @@ func TestLocalIconsRejectsTraversalNames(t *testing.T) {
 	}
 	if got != 0 {
 		t.Errorf("LocalIcons() = %d, want 0", got)
+	}
+}
+
+// An abandoned response body cannot be recycled by the transport, so the server
+// sees a fresh connection per request instead of reusing one. This is the test
+// that was missing when the body Close was deleted along with the page scraper:
+// the tiny-body tests below all pass either way.
+func TestTruncatedIconDoesNotLeakConnections(t *testing.T) {
+	huge := append([]byte("\x89PNG\r\n\x1a\n"), bytes.Repeat([]byte{0x7f}, 4<<20)...)
+	s := newSite(t, map[string]http.HandlerFunc{
+		"/favicon.ico": image(huge, "image/png"),
+	})
+	r := testResolver(t, Options{MaxBytes: 8 << 10})
+	r.Allow([]string{s.URL})
+
+	const n = 12
+	for i := 0; i < n; i++ {
+		// Distinct hosts, so nothing is served from the cache and every one of
+		// them performs a real fetch that stops mid-body.
+		u := fmt.Sprintf("%s/?i=%d", s.URL, i)
+		if _, ok := r.Lookup(context.Background(), u); ok {
+			t.Fatalf("Lookup(%q) = true for an oversized icon", u)
+		}
+	}
+
+	// Give the transport a moment to notice the closed connections.
+	time.Sleep(100 * time.Millisecond)
+	if got := s.liveConns(); got > 2 {
+		t.Errorf("server holds %d connections after %d truncated fetches, want at most 2 "+
+			"(an unclosed body cannot be reused)", got, n)
+	}
+}
+
+// A panic inside the resolver must not turn one key into a permanent stall:
+// the flight table has to be cleaned up on the way out.
+func TestFlightGroupCleansUpAfterAPanic(t *testing.T) {
+	var g flightGroup
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Error("the panic did not propagate")
+			}
+		}()
+		g.do("k", func() (Icon, bool) { panic("boom") })
+	}()
+
+	g.mu.Lock()
+	left := len(g.calls)
+	g.mu.Unlock()
+	if left != 0 {
+		t.Errorf("flight table holds %d entries after a panic, want 0", left)
+	}
+
+	// The key has to be usable again, not block forever.
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if _, ok := g.do("k", func() (Icon, bool) { return Icon{Data: pngBytes}, true }); !ok {
+			t.Error("second do() = false, want the fresh result")
+		}
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("do() after a panic blocked forever; the key is a black hole")
 	}
 }

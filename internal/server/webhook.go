@@ -69,11 +69,31 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		event = r.Header.Get("X-Gitea-Event")
 	}
 	if event == "" {
+		event = r.Header.Get("X-Gogs-Event")
+	}
+	if event == "" {
 		event = r.Header.Get("X-GitHub-Event")
 	}
 	if event == "ping" {
 		// Gitea sends this when the webhook is created or tested.
 		s.writeJSON(w, http.StatusOK, map[string]string{"status": "pong"})
+		return
+	}
+
+	// Only a push changes the files this serves. A hook wired to other events
+	// (issues, releases, pull requests) would otherwise ask for a reload on every
+	// one of them: harmless, because a reload that changes nothing stops at the
+	// watcher's fingerprint, but a request per event that can never have an
+	// effect is not worth honouring. Answered 202 like the old branch filter's
+	// "ignored" reply, so an over-subscribed hook does not look like a failure in
+	// the git server's delivery log.
+	if !reloadableEvent(event) {
+		s.log.Info("webhook ignored: event is not a push",
+			"event", event, "remote", clientIP(r))
+		s.writeJSON(w, http.StatusAccepted, map[string]string{
+			"status": "ignored",
+			"reason": "event " + event + " does not change the config",
+		})
 		return
 	}
 
@@ -100,6 +120,13 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		"remote", clientIP(r))
 
 	s.writeJSON(w, http.StatusAccepted, map[string]string{"status": "reload requested"})
+}
+
+// reloadableEvent reports whether an event can have changed the config. A
+// missing event name is accepted: reloading on a payload that does not say what
+// it is costs one fetch and a missed update is worse.
+func reloadableEvent(event string) bool {
+	return event == "" || strings.EqualFold(event, "push")
 }
 
 // signatureHeaders are the signature headers accepted, in no particular order

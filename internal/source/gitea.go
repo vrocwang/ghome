@@ -128,8 +128,9 @@ type repoResponse struct {
 	FullName string `json:"full_name"`
 }
 
-// Ref is the configured branch/tag/SHA. The webhook handler uses it to ignore
-// pushes to unrelated branches.
+// Ref is the configured branch/tag/SHA: which version of the config file to
+// read. It no longer takes part in webhook filtering -- that moved to the git
+// server's own branch filter -- so this is reporting, not policy.
 func (g *Gitea) Ref() string { return g.ref }
 
 func (g *Gitea) Describe() string {
