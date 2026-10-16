@@ -216,21 +216,25 @@ func TestWebhookRefusesAnOversizedBody(t *testing.T) {
 	}
 }
 
-// A signed body that is not JSON is reachable: any proxy or a hand-wired hook
-// can produce one. It must be a 4xx, never a panic and never a reload.
-func TestWebhookRejectsASignedBodyThatIsNotJSON(t *testing.T) {
+// A signed body that is not JSON is what a hook configured for the form payload
+// sends: Forgejo offers both, and the HMAC is computed over whichever it sent.
+// The push event is the signal and the body is only read for the log line, so
+// this has to reload. Refusing it answered 400 to a working hook and silently
+// demoted the page to the polling cadence.
+func TestWebhookReloadsOnASignedFormBody(t *testing.T) {
 	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
-	body := `<html>not a push payload</html>`
+	body := "payload=%7B%22ref%22%3A%22refs%2Fheads%2Fmain%22%7D"
 	rec := postWebhook(t, srv, body, map[string]string{
-		"X-Gitea-Event":     "push",
-		"X-Gitea-Signature": sign(t, body, "s3cret"),
+		"X-Forgejo-Event":     "push",
+		"X-Forgejo-Signature": sign(t, body, "s3cret"),
+		"Content-Type":        "application/x-www-form-urlencoded",
 	})
-	if rec.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400 (body %s)", rec.Code, rec.Body)
+	if rec.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want 202 (body %s)", rec.Code, rec.Body)
 	}
-	if counter.n != 0 {
-		t.Errorf("an unparseable body triggered a reload %d times", counter.n)
+	if counter.n != 1 {
+		t.Errorf("a signed form body reloaded %d times, want 1", counter.n)
 	}
 }
 

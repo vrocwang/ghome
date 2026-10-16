@@ -97,7 +97,7 @@ groups:
         tags: [git, 私有]                 # (空) 右侧小标签，最多 8 个（超了会警告并截断）
                                          #   只在 grid 布局显示；但任何布局下都参与搜索
         hotkey: g                        # (空) 单字符，页面任意位置按下即跳转
-        newTab: true                     # (true) false 表示当前标签页打开；也可写 "false"/no/off
+        newTab: true                     # (true) false 表示当前标签页打开（只认 true/false）
         pinned: false                    # (false) true 会提升到页面顶部的置顶区
         probe: true                      # (true) false 表示这个链接不参与状态探测
         private: false                   # (false) true = 只有持配置仓读权限令牌的人才看得到

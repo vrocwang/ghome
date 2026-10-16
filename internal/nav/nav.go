@@ -22,7 +22,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strconv"
 	"strings"
 	"time"
 	"unicode"
@@ -435,20 +434,20 @@ func Parse(data []byte) (*Config, []string, error) {
 	if err != nil {
 		return nil, nil, err
 	}
-	// Written spellings of booleans are folded onto real booleans before either
-	// pass runs. yaml.v3 rejects `newTab: "false"` as a type error, which would
-	// take the whole document down over a cosmetic field -- exactly the outcome
-	// the two-tier validation exists to avoid, and a trap for the value that is
-	// quoted out of habit. Applied to the tree, both passes see one document.
-	coerceBools(node)
+
+	// Every boolean field is checked against the tree before either pass runs,
+	// so an unusable value is refused by field name and line (see checkBools)
+	// rather than being interpreted out of yaml's own message, which quotes the
+	// value.
+	var p problems
+	checkBools(node, "", &p)
 
 	// The strict pass reads the original bytes -- so its "line N" is the line
-	// the author wrote -- while the lenient pass reads the coerced tree. A
-	// written boolean therefore fails the strict pass first; boolLines is how
-	// that expected complaint is told apart from a real type error.
-	warnings, err := collectUnknownFields(data, boolLines(node))
+	// the author wrote -- while the lenient pass reads the tree, which
+	// checkBools has already cleaned up.
+	warnings, err := collectUnknownFields(data)
 	if err != nil {
-		return nil, nil, err
+		return nil, warnings, err
 	}
 
 	// Decode leniently: the strict pass above may have stopped filling the
@@ -461,7 +460,12 @@ func Parse(data []byte) (*Config, []string, error) {
 	normalizeWarnings, err := c.normalize()
 	warnings = append(warnings, normalizeWarnings...)
 	if err != nil {
-		return nil, warnings, err
+		// Appended rather than returned straight away, so one push reports the
+		// boolean fields and everything normalize found in the same message.
+		p = append(p, err.Error())
+	}
+	if len(p) > 0 {
+		return nil, warnings, errors.New(strings.Join(p, "; "))
 	}
 	return &c, warnings, nil
 }
@@ -482,8 +486,8 @@ func decodeNode(data []byte) (*yaml.Node, error) {
 }
 
 // boolFields are the mapping keys whose value is a boolean, anywhere in the
-// document. Only these are coerced: coercing every scalar would turn a link
-// named "no" into a boolean.
+// document. Only these keys are looked at; every other scalar is left alone, so
+// a link named "no" stays a link name.
 var boolFields = map[string]bool{
 	"enabled": true,
 	"private": true,
@@ -492,54 +496,66 @@ var boolFields = map[string]bool{
 	"probe":   true,
 }
 
-// coerceBools rewrites a written boolean ("false", "no", "off", "0", ...) into
-// a real boolean node. A value that is none of those is left untouched, so the
-// decoder still reports it -- with the line number -- instead of this function
-// inventing an error of its own.
-func coerceBools(n *yaml.Node) {
+// checkBools refuses every value under a boolean key that yaml will not decode
+// as a boolean -- a quoted `"false"`, a bare `yes`/`no`/`on`/`off`, a number, a
+// list -- and removes it from the tree so the rest of the document can still be
+// checked and reported in the same push.
+//
+// Reading those spellings was the most elaborate piece of this package and is
+// deliberately gone. yaml.v3 is strict about booleans, every one of these
+// fields is optional, and the value must not be guessed at: `private` defaults
+// to publishing the entry, so a `"true"` this code could not read would turn a
+// hidden link into a public one. Refusing names the field and the line instead.
+//
+// The value itself is never repeated in the message. This text reaches
+// /healthz and the 503 body of /api/nav, neither of which is authenticated, and
+// what was written in a boolean field may still be someone's URL or token.
+func checkBools(n *yaml.Node, path string, p *problems) {
 	if n == nil {
 		return
 	}
 	switch n.Kind {
-	case yaml.DocumentNode, yaml.SequenceNode:
+	case yaml.DocumentNode:
 		for _, child := range n.Content {
-			coerceBools(child)
+			checkBools(child, path, p)
+		}
+	case yaml.SequenceNode:
+		for i, child := range n.Content {
+			checkBools(child, fmt.Sprintf("%s[%d]", path, i), p)
 		}
 	case yaml.MappingNode:
 		for i := 0; i+1 < len(n.Content); i += 2 {
 			key, value := n.Content[i], n.Content[i+1]
-			if boolFields[key.Value] && value.Kind == yaml.ScalarNode {
-				if b, ok := parseBoolWord(value.Value); ok {
-					// The Style has to be cleared and Value made canonical,
-					// not just the tag: the encoder quotes a scalar according
-					// to Style, so a node the author wrote as "false" was
-					// written back out with the quotes and the strict pass read
-					// it as a string again. Line and Column stay, so messages
-					// still point at the line the author wrote.
-					value.Kind, value.Tag = yaml.ScalarNode, "!!bool"
-					value.Style, value.Value = 0, b
-				}
+			child := key.Value
+			if path != "" {
+				child = path + "." + key.Value
 			}
-			coerceBools(value)
+			if boolFields[key.Value] && !isBool(value) {
+				p.addf("%s: expected true or false (line %d)", child, value.Line)
+				// Dropping the pair is what lets the lenient decode below run,
+				// which is what lets one push report every problem it has.
+				n.Content = append(n.Content[:i], n.Content[i+2:]...)
+				i -= 2 // the next key now sits where this one was
+				continue
+			}
+			checkBools(value, child, p)
 		}
 	}
 }
 
-// parseBoolWord recognises the spellings people actually type for a boolean.
-func parseBoolWord(v string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "true", "yes", "on", "1":
-		return "true", true
-	case "false", "no", "off", "0":
-		return "false", true
+// isBool reports whether yaml will decode this value into a bool: a real
+// boolean scalar, or an alias pointing at one.
+func isBool(n *yaml.Node) bool {
+	if n != nil && n.Kind == yaml.AliasNode {
+		n = n.Alias
 	}
-	return "", false
+	return n != nil && n.Kind == yaml.ScalarNode && n.Tag == "!!bool"
 }
 
 // collectUnknownFields runs a strict decode purely to catch typo'd keys, which
 // are reported as warnings rather than failures. Type mismatches and malformed
 // documents stay fatal.
-func collectUnknownFields(data []byte, coerced map[int]bool) ([]string, error) {
+func collectUnknownFields(data []byte) ([]string, error) {
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	dec.KnownFields(true)
 
@@ -559,10 +575,10 @@ func collectUnknownFields(data []byte, coerced map[int]bool) ([]string, error) {
 		switch {
 		case isUnknownField(msg):
 			warnings = append(warnings, "ignored unknown field ("+msg+")")
-		case atCoercedBool(msg, coerced):
-			// coerceBools accepts a written boolean, and the lenient pass below
-			// decodes the coerced tree. Not fatal here, and not worth a warning
-			// either: "false" was understood.
+		case strings.Contains(msg, "into bool"):
+			// checkBools already refused this one by field and line. yaml's
+			// wording is dropped rather than repeated: it quotes the value, and
+			// this text is served by /healthz and by the 503 body of /api/nav.
 		default:
 			fatal = append(fatal, msg)
 		}
@@ -575,56 +591,6 @@ func collectUnknownFields(data []byte, coerced map[int]bool) ([]string, error) {
 
 func isUnknownField(msg string) bool {
 	return strings.Contains(msg, "not found in type")
-}
-
-// boolLines is the set of line numbers holding a value for a boolean field.
-//
-// yaml.v3's type errors do not name the field ("line 6: cannot unmarshal !!str
-// `false` into bool"), so the line is the only handle on what complained -- and
-// the line is worth keeping, because that is what sends the reader to the right
-// row of nav.yaml.
-func boolLines(n *yaml.Node) map[int]bool {
-	out := map[int]bool{}
-	boolLinesInto(n, out)
-	return out
-}
-
-func boolLinesInto(n *yaml.Node, out map[int]bool) {
-	if n == nil {
-		return
-	}
-	switch n.Kind {
-	case yaml.DocumentNode, yaml.SequenceNode:
-		for _, child := range n.Content {
-			boolLinesInto(child, out)
-		}
-	case yaml.MappingNode:
-		for i := 0; i+1 < len(n.Content); i += 2 {
-			key, value := n.Content[i], n.Content[i+1]
-			if boolFields[key.Value] && value.Kind == yaml.ScalarNode {
-				out[value.Line] = true
-			}
-			boolLinesInto(value, out)
-		}
-	}
-}
-
-// atCoercedBool reports whether this complaint is about a value coerceBools
-// already understood.
-func atCoercedBool(msg string, coerced map[int]bool) bool {
-	if !strings.Contains(msg, "into bool") {
-		return false
-	}
-	rest, ok := strings.CutPrefix(msg, "line ")
-	if !ok {
-		return false
-	}
-	num, _, ok := strings.Cut(rest, ":")
-	if !ok {
-		return false
-	}
-	line, err := strconv.Atoi(strings.TrimSpace(num))
-	return err == nil && coerced[line]
 }
 
 // problems accumulates every validation error so one push reports all of them

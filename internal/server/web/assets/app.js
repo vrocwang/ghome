@@ -64,6 +64,9 @@
     // without moving meta.revision, and gating the redraw on the revision alone
     // then reports "unlocked" while the page stays locked.
     renderedViewKey: null,
+    // Same reasoning for the warnings the banner shows: they can change while
+    // the revision does not.
+    renderedWarnings: null,
     // Bumped by every load(), so a response that arrives after a newer one can
     // be dropped instead of dragging the page back to a stale revision.
     loadSeq: 0,
@@ -351,7 +354,20 @@
 
       setStoredToken(value);
       els.unlockToken.value = '';
-      await reloadView();
+      var answered = await reloadView();
+
+      // reloadView() is false only when /api/nav could not be fetched at all.
+      // The config still in hand is then the anonymous one from before the
+      // token was pasted, whose check is "rejected" -- reading that as this
+      // token's verdict deleted a good token on every network hiccup, which is
+      // exactly what the "rejected vs unavailable" split exists to prevent.
+      if (!answered) {
+        els.unlockToken.value = value; // stored already; let the retry resubmit
+        els.unlockForm.hidden = false;
+        els.unlockToken.focus();
+        toast('暂时无法确认令牌，请重试');
+        return;
+      }
 
       var view = (state.config && state.config.private) || null;
       // The server says why the tier stayed shut: "rejected" means the forge
@@ -813,20 +829,31 @@
   // dropped: rendering it would move the page back to an older revision, and
   // since the newer change was already consumed and reported, nothing would
   // correct it until some unrelated push.
+  //
+  // What arrives is therefore held locally until that check has passed. Writing
+  // it into state.config on arrival parked the losing response in shared state
+  // even though it was never rendered -- and the next renderContent (a keystroke
+  // in the search box, a click on the health pill) then painted the older
+  // revision while renderedRev still named the newer one, so nothing corrected
+  // it either. The same window let a token-scoped /api/status response land
+  // after a logout had dropped the results it belongs to.
   async function load(options) {
     options = options || {};
     var seq = ++state.loadSeq;
 
     var navError = null;
+    var fetchedConfig = null;
+    var fetchedStatus = null;
+
     var navPromise = fetchJSON('api/nav').then(function (body) {
-      state.config = body;
+      fetchedConfig = body;
     }).catch(function (err) {
       navError = err;
     });
 
     // Status is optional: a failure there must never break the page.
     var statusPromise = fetchJSON('api/status').then(function (body) {
-      if (body && typeof body.enabled === 'boolean') state.status = body;
+      if (body && typeof body.enabled === 'boolean') fetchedStatus = body;
     }).catch(function () { /* leave the previous status in place */ });
 
     await Promise.all([navPromise, statusPromise]);
@@ -840,7 +867,7 @@
       // revision moves on its own, so an SSE event that changes the config can
       // beat the browser's copy of custom.css. Handing that marker back to
       // "unknown" costs one extra applyThemeSheet and closes the window.
-      var seen = (state.config && state.config.meta && state.config.meta.themeRevision) || null;
+      var seen = (fetchedConfig && fetchedConfig.meta && fetchedConfig.meta.themeRevision) || null;
       if (seen && seen !== state.renderedThemeRev) state.renderedThemeRev = null;
       return false;
     }
@@ -854,6 +881,9 @@
       return false;
     }
 
+    state.config = fetchedConfig;
+    if (fetchedStatus) state.status = fetchedStatus;
+
     var meta = state.config.meta || {};
     var revision = meta.revision;
     var themeRevision = meta.themeRevision;
@@ -865,7 +895,14 @@
     var themeChanged = themeRevision !== state.renderedThemeRev;
     var key = viewKey(state.config);
     var viewChanged = key !== state.renderedViewKey;
-    var navChanged = revision !== state.renderedRev || viewChanged || options.forceRender === true;
+    // Warnings are part of what the page shows -- the banner above the cards --
+    // and the server can change them without moving the revision, because a
+    // stylesheet it refused to swap in leaves the fingerprint alone. Without a
+    // key of their own a banner once drawn would keep describing a stylesheet
+    // that has since recovered, until some unrelated push redrew the page.
+    var warningsKey = (meta.warnings || []).join('\u0000');
+    var navChanged = revision !== state.renderedRev || viewChanged ||
+      warningsKey !== state.renderedWarnings || options.forceRender === true;
 
     if (themeChanged) {
       state.renderedThemeRev = themeRevision;
@@ -881,6 +918,7 @@
     if (navChanged) {
       state.renderedRev = revision;
       state.renderedViewKey = key;
+      state.renderedWarnings = warningsKey;
       var scrollY = window.scrollY;
       render();
       window.scrollTo(0, scrollY);

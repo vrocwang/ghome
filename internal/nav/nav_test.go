@@ -797,23 +797,58 @@ groups:
 	}
 }
 
-// `newTab: "false"` used to be a fatal type error, taking the whole document
-// down over a cosmetic field. Written booleans are folded onto real ones now,
-// for every boolean key, while a value that is not a boolean still fails with
-// the line number.
-func TestWrittenBooleansAreAccepted(t *testing.T) {
-	doc := `
+// A boolean has to be written as a real YAML boolean. Reading the written
+// spellings ("false", yes, off, 1) was this package's most elaborate piece and
+// is gone: the document is refused instead, by field and line, so the author
+// fixes it in one push. Guessing is the thing that must not come back, because
+// `private` defaults to publishing the entry -- a `"true"` this code read as
+// anything but true would turn a hidden link into a public one.
+func TestBooleansMustBeWrittenAsBooleans(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		doc  string
+		want string
+	}{
+		{"quoted false", "search:\n  enabled: \"false\"\n", "search.enabled: expected true or false (line 2)"},
+		{"uppercase word", "search:\n  enabled: \"YES\"\n", "search.enabled"},
+		{"bare yes", "groups:\n  - name: g\n    private: yes\n", "groups[0].private"},
+		{"bare off", "groups:\n  - name: g\n    links:\n      - {name: a, url: https://a.example.com, pinned: on}\n", "groups[0].links[0].pinned"},
+		{"number", "groups:\n  - name: g\n    links:\n      - {name: a, url: https://a.example.com, probe: 0}\n", "groups[0].links[0].probe"},
+		{"list", "groups:\n  - name: g\n    links:\n      - {name: a, url: https://a.example.com, newTab: [false]}\n", "groups[0].links[0].newTab"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := Parse([]byte(tc.doc))
+			if err == nil {
+				t.Fatal("Parse() accepted a value that is not a boolean")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("error = %q, want it to mention %q", err, tc.want)
+			}
+		})
+	}
+
+	// The value itself is never repeated back: this text reaches /healthz and
+	// the 503 body of /api/nav, and neither is authenticated.
+	if _, _, err := Parse([]byte("groups:\n  - name: g\n    private: \"https://secret.example.com?t=abc\"\n")); err == nil {
+		t.Fatal("a URL in a boolean field was accepted")
+	} else if strings.Contains(err.Error(), "secret.example.com") {
+		t.Errorf("the error quoted the value: %v", err)
+	}
+
+	// The real thing still works, including a bare TRUE and a boolean behind an
+	// alias. Everything outside a boolean field is untouched, so a link named
+	// "no" is still a link named "no".
+	cfg, _, err := Parse([]byte(`
 search:
-  enabled: "false"
+  enabled: false
 status:
-  enabled: "YES"
+  enabled: &b true
 groups:
   - name: g
-    private: "off"
+    private: false
     links:
-      - {name: a, url: https://a.example.com, newTab: "false", pinned: "on", probe: "no"}
-`
-	cfg, _, err := Parse([]byte(doc))
+      - {name: "no", url: https://a.example.com, newTab: false, pinned: *b, probe: false}
+`))
 	if err != nil {
 		t.Fatalf("Parse() error = %v", err)
 	}
@@ -823,34 +858,18 @@ groups:
 	if cfg.Status.Enabled == nil || !*cfg.Status.Enabled {
 		t.Errorf("status.enabled = %v, want true", cfg.Status.Enabled)
 	}
-	g := cfg.Groups[0]
-	if g.Private {
-		t.Error("groups[0].private = true, want false")
+	link := cfg.Groups[0].Links[0]
+	if link.Name != "no" {
+		t.Errorf("name = %q, want the boolean word to survive as text", link.Name)
 	}
-	if g.Links[0].NewTab == nil || *g.Links[0].NewTab {
-		t.Errorf("newTab = %v, want false", g.Links[0].NewTab)
+	if link.NewTab == nil || *link.NewTab {
+		t.Errorf("newTab = %v, want false", link.NewTab)
 	}
-	if !g.Links[0].Pinned {
-		t.Error("pinned = false, want true")
+	if !link.Pinned {
+		t.Error("pinned = false, want true (an alias to a real boolean)")
 	}
-	if g.Links[0].Probe == nil || *g.Links[0].Probe {
-		t.Errorf("probe = %v, want false", g.Links[0].Probe)
-	}
-
-	// Something that is not a boolean at all still fails, and still says where.
-	if _, _, err := Parse([]byte("groups:\n  - name: g\n    links:\n      - {name: a, url: https://a.example.com, newTab: maybe}\n")); err == nil {
-		t.Fatal("newTab: maybe was accepted")
-	} else if !strings.Contains(err.Error(), "line 4") {
-		t.Errorf("error = %v, want it to carry the line number", err)
-	}
-
-	// A link whose *name* is a boolean word must survive untouched.
-	named, _, err := Parse([]byte("groups:\n  - name: g\n    links:\n      - {name: \"no\", url: https://a.example.com}\n"))
-	if err != nil {
-		t.Fatalf("Parse() error = %v", err)
-	}
-	if got := named.Groups[0].Links[0].Name; got != "no" {
-		t.Errorf("name = %q, want %q", got, "no")
+	if link.Probe == nil || *link.Probe {
+		t.Errorf("probe = %v, want false", link.Probe)
 	}
 }
 

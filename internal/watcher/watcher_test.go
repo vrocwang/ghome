@@ -456,6 +456,46 @@ func TestWarningsReachTheStoreEvenWhenNothingElseChanged(t *testing.T) {
 	}
 }
 
+// ...and a warning that stays the same must not republish on every poll.
+// "There are warnings, so publish" moved UpdatedAt once per interval and sent
+// every connected browser a "changed" event for a config nobody had edited.
+func TestAStableWarningIsNotRepublished(t *testing.T) {
+	src := &multiSource{css: []byte(".link{color:red}\n")}
+	src.set(docWithCSS, "rev-a")
+	st := store.New()
+	w := New(src, st, time.Minute, discardLogger())
+
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	// Oversized now, so the previous copy stays in service and a warning exists.
+	src.setCSS([]byte(strings.Repeat("a", maxCustomCSS+1)))
+	if err := w.refresh(context.Background()); err != nil {
+		t.Fatalf("refresh() error = %v", err)
+	}
+	if len(mustWarnings(t, st)) == 0 {
+		t.Fatal("the warning under test never appeared")
+	}
+
+	updates := 0
+	w.OnUpdate = func(*nav.Config) { updates++ }
+	before, _ := st.Get()
+
+	for i := 0; i < 3; i++ {
+		if err := w.refresh(context.Background()); err != nil {
+			t.Fatalf("refresh() error = %v", err)
+		}
+	}
+
+	if updates != 0 {
+		t.Errorf("OnUpdate ran %d times for an unchanged config, want 0", updates)
+	}
+	if after, _ := st.Get(); !after.Meta.UpdatedAt.Equal(before.Meta.UpdatedAt) {
+		t.Errorf("updatedAt moved from %v to %v although nothing changed",
+			before.Meta.UpdatedAt, after.Meta.UpdatedAt)
+	}
+}
+
 func mustWarnings(t *testing.T, st *store.Store) []string {
 	t.Helper()
 	payload, ok := st.Get()

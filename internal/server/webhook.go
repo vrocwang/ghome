@@ -97,11 +97,18 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// The body is read for the log line only; the push event above is the
+	// signal. Forgejo offers both a JSON and a form payload for the same hook
+	// (/docs/latest/user/repository/webhooks/), and the HMAC is computed over
+	// whatever it decides to send, so the body shape is no reason to refuse:
+	// answering 400 here turned a supported hook configuration into a silent
+	// downgrade to polling, with the failure visible only in the forge's
+	// delivery log. A reload that changes nothing stops at the watcher's
+	// fingerprint, so honouring it costs one fetch.
 	var payload giteaPushPayload
 	if err := json.Unmarshal(body, &payload); err != nil {
-		s.log.Warn("webhook body is not JSON", "error", err, "remote", clientIP(r))
-		s.writeJSON(w, http.StatusBadRequest, navError{Error: "could not parse the webhook payload"})
-		return
+		s.log.Debug("webhook body is not JSON; reloading anyway",
+			"error", err, "remote", clientIP(r))
 	}
 
 	// Any push reloads. There is no branch filter here on purpose: a git server
@@ -114,6 +121,7 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	s.log.Info("webhook received, reloading",
 		"event", event,
+		"content_type", r.Header.Get("Content-Type"),
 		"ref", payload.Ref,
 		"repo", payload.Repository.FullName,
 		"commit", shorten(payload.After),

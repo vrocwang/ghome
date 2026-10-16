@@ -377,9 +377,9 @@ func TestGiteaDescribeUsesTheConfiguredKind(t *testing.T) {
 	}
 }
 
-// CanRead is the whole permission model for the private links: any answer it
+// CheckRead is the whole permission model for the private links: any answer it
 // wrongly accepts hands them over, so it is claimed here case by case.
-func TestCanReadIsStrict(t *testing.T) {
+func TestCheckReadIsStrict(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/v1/repos/acme/nav", func(w http.ResponseWriter, r *http.Request) {
 		switch strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ") {
@@ -428,8 +428,9 @@ func TestCanReadIsStrict(t *testing.T) {
 		"redirect":   false,
 	}
 	for token, want := range allowed {
-		if got := src.CanRead(context.Background(), token); got != want {
-			t.Errorf("CanRead(%q) = %v, want %v", token, got, want)
+		got := src.CheckRead(context.Background(), token) == AccessOK
+		if got != want {
+			t.Errorf("CheckRead(%q) == ok is %v, want %v", token, got, want)
 		}
 	}
 }

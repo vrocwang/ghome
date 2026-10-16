@@ -113,7 +113,7 @@ func NewGitea(o GiteaOptions) (*Gitea, error) {
 		// A redirect is never part of the API contract. Following one would let
 		// whatever sits behind it answer for the repository: an SSO login page
 		// or a proxy error page that returns 200 for everything is exactly what
-		// CanRead must not mistake for a permission.
+		// CheckRead must not mistake for a permission.
 		client: &http.Client{
 			Timeout: timeout,
 			CheckRedirect: func(*http.Request, []*http.Request) error {
@@ -123,7 +123,8 @@ func NewGitea(o GiteaOptions) (*Gitea, error) {
 	}, nil
 }
 
-// repoResponse is the little of GET /repos/{owner}/{repo} CanRead needs.
+// repoResponse is the little of GET /repos/{owner}/{repo} the permission check
+// needs.
 type repoResponse struct {
 	FullName string `json:"full_name"`
 }
@@ -229,13 +230,6 @@ func (g *Gitea) CheckRead(ctx context.Context, token string) Access {
 		return AccessRejected
 	}
 	return AccessOK
-}
-
-// CanRead is CheckRead reduced to a yes/no, for callers with nothing to do with
-// the difference. Anything that is not a clear yes is false, which is the safe
-// direction.
-func (g *Gitea) CanRead(ctx context.Context, token string) bool {
-	return g.CheckRead(ctx, token) == AccessOK
 }
 
 func (g *Gitea) fetchPath(ctx context.Context, path string) (Snapshot, error) {

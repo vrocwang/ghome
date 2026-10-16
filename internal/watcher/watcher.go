@@ -8,8 +8,11 @@ package watcher
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
@@ -224,6 +227,16 @@ func (w *Watcher) sleep(ctx context.Context, d time.Duration) (kicked bool, ok b
 	}
 }
 
+// fingerprintOf is the change marker the early return compares. It covers the
+// document revision, the stylesheet revision and the warnings, so exactly one
+// publish happens per real change and none per poll. Warnings are ordered
+// deterministically by the parser, so the same conditions produce the same
+// marker.
+func fingerprintOf(rev, cssRev string, warnings []string) string {
+	sum := sha256.Sum256([]byte(rev + "|" + cssRev + "|" + strings.Join(warnings, "\n")))
+	return hex.EncodeToString(sum[:12])
+}
+
 // refresh performs one fetch and publishes it if anything changed.
 func (w *Watcher) refresh(ctx context.Context) error {
 	snap, err := w.src.Fetch(ctx)
@@ -245,13 +258,15 @@ func (w *Watcher) refresh(ctx context.Context) error {
 	css, cssRev, extraWarnings := w.fetchExtras(ctx, cfg)
 	warnings = append(warnings, extraWarnings...)
 
-	fingerprint := snap.Rev + "|" + cssRev
-	// The warnings take part: an unusable stylesheet leaves the fingerprint
-	// alone (the previous stylesheet is still in service, and that is the point),
-	// so returning early here would keep the new warning out of the store -- out
-	// of the page banner -- forever, while still logging it on every poll.
-	haveWarnings := len(warnings) > 0
-	if w.store.Loaded() && fingerprint == w.fingerprint && !haveWarnings {
+	fingerprint := fingerprintOf(snap.Rev, cssRev, warnings)
+	// The warnings take part, rather than the check being skipped whenever any
+	// of them exists. A kept-back stylesheet leaves the document and the
+	// stylesheet revision alone -- that is the point of keeping it -- so the
+	// warning has to be able to move the fingerprint on its own, or it would
+	// never reach the store. Republishing on every poll instead (which is what
+	// "any warning means republish" amounts to) moved UpdatedAt and woke every
+	// connected browser once per interval for a config that had not changed.
+	if w.store.Loaded() && fingerprint == w.fingerprint {
 		// Clearing the error here means a recovered git host stops being
 		// reported as failing on the next poll.
 		w.store.SetError(nil)
