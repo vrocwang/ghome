@@ -56,4 +56,9 @@ body {
  *   --gap  --card-padding  --link-padding  --card-shadow  --card-shadow-hover
  *   --font-family  --ok  --warn  --bad
  * 另外每个分组卡片上有一个 --group-accent（来自该分组的 color 字段）。
+ *
+ * 这个文件追加在 /theme.css 之后，所以这里写的规则优先级更高——**但这把两个主题一起改了**。
+ * 只想改其中一个主题时，用内嵌样式表自己用的那个选择器包起来：
+ *   :root[data-theme="dark"] { --card-shadow: none; }
+ * 同理，颜色令牌写在裸 :root 上也会同时作用于深色主题，那次主题开关就会看着像失效。
  */

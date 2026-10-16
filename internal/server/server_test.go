@@ -458,10 +458,42 @@ style:
 		}
 	}
 	// A light colour must not be repeated for dark mode: doing that erased every
-	// colour the config named and left the theme toggle looking broken. With no
-	// style.dark block there is nothing dark-specific to emit at all.
-	if strings.Contains(body, `[data-theme="dark"]`) {
-		t.Errorf("a light-only style block must not emit a dark override:\n%s", body)
+	// colour the config named and left the theme toggle looking broken. So the
+	// dark blocks may exist (cardStyle states a shadow for both themes) but none
+	// of the light colours may appear in one.
+	for _, block := range blocksFor(body, `:root[data-theme="dark"]`) {
+		if strings.Contains(block, "--accent") || strings.Contains(block, "--radius") {
+			t.Errorf("a light colour leaked into a dark block:\n%s", block)
+		}
+	}
+}
+
+// cardStyle is a preset, not a light-theme colour, and the built-in stylesheet
+// has shadows of its own for dark mode -- so a preset has to state both or the
+// built-in wins there. cardStyle: flat used to come back with shadows the moment
+// the page went dark.
+func TestCardStyleStatesBothThemes(t *testing.T) {
+	cases := map[string]struct{ light, dark string }{
+		"flat":   {"none", "none"},
+		"soft":   {"0 1px 2px rgba(16,24,40,.05)", "0 1px 2px rgba(0,0,0,.45)"},
+		"strong": {"0 6px 24px rgba(16,24,40,.12)", "0 6px 24px rgba(0,0,0,.55)"},
+	}
+	for cardStyle, want := range cases {
+		t.Run(cardStyle, func(t *testing.T) {
+			srv, _ := newTestServer(t, Options{Store: styledStore(t, "style:\n  cardStyle: "+cardStyle+"\n"+goodDoc)})
+			rec := httptest.NewRecorder()
+			srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/theme.css", nil))
+			body := rec.Body.String()
+
+			light := blockFor(t, body, ":root {")
+			if !strings.Contains(light, "--card-shadow: "+want.light+";") {
+				t.Errorf("light --card-shadow, want %q:\n%s", want.light, light)
+			}
+			dark := blockFor(t, body, `:root[data-theme="dark"] {`)
+			if !strings.Contains(dark, "--card-shadow: "+want.dark+";") {
+				t.Errorf("dark --card-shadow, want %q (the built-in dark shadow wins otherwise):\n%s", want.dark, dark)
+			}
+		})
 	}
 }
 
@@ -510,19 +542,33 @@ style:
 	}
 }
 
-// blockFor returns the body of the first CSS block whose header is header.
+// blocksFor returns the body of every CSS block with this header, in file order.
+func blocksFor(css, header string) []string {
+	var out []string
+	rest := css
+	for {
+		i := strings.Index(rest, header)
+		if i < 0 {
+			return out
+		}
+		rest = rest[i+len(header):]
+		j := strings.Index(rest, "}")
+		if j < 0 {
+			return append(out, rest)
+		}
+		out = append(out, rest[:j])
+		rest = rest[j:]
+	}
+}
+
+// blockFor returns the first CSS block with this header.
 func blockFor(t *testing.T, css, header string) string {
 	t.Helper()
-	i := strings.Index(css, header)
-	if i < 0 {
+	blocks := blocksFor(css, header)
+	if len(blocks) == 0 {
 		t.Fatalf("no %q block in:\n%s", header, css)
 	}
-	rest := css[i+len(header):]
-	j := strings.Index(rest, "}")
-	if j < 0 {
-		t.Fatalf("unterminated block after %q", header)
-	}
-	return rest[:j]
+	return blocks[0]
 }
 
 func TestThemeCSSIsValidWithNoStyleBlock(t *testing.T) {

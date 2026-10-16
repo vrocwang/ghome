@@ -215,7 +215,7 @@ style:
   width: 1280             # 内容最大宽度
   iconSize: 22            # 图标尺寸
   density: compact        # comfortable | compact
-  cardStyle: strong       # soft | flat | strong
+  cardStyle: strong       # soft | flat | strong，两个主题各自生效
 ```
 
 上面这些颜色只作用于**浅色主题**。深色主题有自己的内置配色，需要的话用 `style.dark` 单独覆盖。

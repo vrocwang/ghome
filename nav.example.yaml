@@ -47,7 +47,7 @@ style:
   width: 1240             # (1240) 内容最大宽度，像素，480~3840
   iconSize: 20            # (20) 图标边长，像素，12~64
   density: comfortable    # comfortable | compact
-  cardStyle: soft         # soft | flat | strong
+  cardStyle: soft         # soft | flat | strong（卡片阴影，两个主题各自生效；flat 在深色下也是平的）
   # 指向同一个仓库里的样式表（最大 512KB），内容会追加到 /theme.css 后面。
   # 想大改样式时用它，改完 push 即生效，不需要碰 ghome 的代码。
   # 默认注释掉：仓库里只有 custom.css.example，直接打开会得到一条"读不到"的告警。

@@ -531,6 +531,10 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 	// apart, and so style.dark can override one colour without re-listing the rest.
 	light := map[string]string{}
 	dark := map[string]string{}
+	// Shadow presets are chosen by cardStyle rather than by the operator, and
+	// each one carries a value for both themes. Kept out of light/dark so a
+	// preset cannot be half-applied by a style.dark colour override.
+	var cardShadow, darkShadow map[string]string
 	for _, c := range []struct{ prop, value string }{
 		{"--accent", style.Accent},
 		{"--bg", style.Background},
@@ -586,14 +590,36 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 	}
 	switch style.CardStyle {
 	case "flat":
-		add("--card-shadow", "none")
-		add("--card-shadow-hover", "none")
+		cardShadow = map[string]string{"--card-shadow": "none", "--card-shadow-hover": "none"}
 	case "soft":
-		add("--card-shadow", "0 1px 2px rgba(16,24,40,.05)")
-		add("--card-shadow-hover", "0 2px 6px rgba(16,24,40,.06), 0 10px 24px rgba(16,24,40,.08)")
+		cardShadow = map[string]string{
+			"--card-shadow":       "0 1px 2px rgba(16,24,40,.05)",
+			"--card-shadow-hover": "0 2px 6px rgba(16,24,40,.06), 0 10px 24px rgba(16,24,40,.08)",
+		}
 	case "strong":
-		add("--card-shadow", "0 6px 24px rgba(16,24,40,.12)")
-		add("--card-shadow-hover", "0 10px 34px rgba(16,24,40,.18)")
+		cardShadow = map[string]string{
+			"--card-shadow":       "0 6px 24px rgba(16,24,40,.12)",
+			"--card-shadow-hover": "0 10px 34px rgba(16,24,40,.18)",
+		}
+	}
+	// The built-in stylesheet gives the dark theme shadows of its own, so a
+	// preset has to state both or the darker built-in wins in dark mode --
+	// cardStyle: flat used to come back with shadows the moment the page went
+	// dark. "flat" is flat in both; the other two are retuned for a dark
+	// surface, where a light-theme shadow is invisible anyway.
+	if cardShadow != nil {
+		darkShadow = map[string]string{}
+		switch style.CardStyle {
+		case "flat":
+			darkShadow["--card-shadow"] = "none"
+			darkShadow["--card-shadow-hover"] = "none"
+		case "soft":
+			darkShadow["--card-shadow"] = "0 1px 2px rgba(0,0,0,.45)"
+			darkShadow["--card-shadow-hover"] = "0 2px 6px rgba(0,0,0,.5), 0 10px 24px rgba(0,0,0,.4)"
+		case "strong":
+			darkShadow["--card-shadow"] = "0 6px 24px rgba(0,0,0,.55)"
+			darkShadow["--card-shadow-hover"] = "0 10px 34px rgba(0,0,0,.6)"
+		}
 	}
 
 	writeBlock := func(selector string, props map[string]string) {
@@ -607,7 +633,7 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 		b.WriteString("}\n")
 	}
 
-	if len(shared) > 0 || len(light) > 0 {
+	if len(shared) > 0 || len(light) > 0 || len(cardShadow) > 0 {
 		b.WriteString("/* generated from nav.yaml style: */\n")
 	}
 	if len(shared) > 0 {
@@ -618,10 +644,14 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 		}
 		b.WriteString("}\n")
 	}
-	// Light colours first, so a dark override of the same property wins by
+	// Light values first, so a dark override of the same property wins by
 	// coming later in the file.
 	writeBlock(":root", light)
+	writeBlock(":root", cardShadow)
+	// Dark colours first, then the shadow preset: within the dark selector
+	// nothing overlaps, but keeping the preset last mirrors the light order.
 	writeBlock(`:root[data-theme="dark"]`, dark)
+	writeBlock(`:root[data-theme="dark"]`, darkShadow)
 }
 
 // handleEvents streams changes to the browser over SSE. The browser therefore
