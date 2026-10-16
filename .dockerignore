@@ -19,6 +19,14 @@ deploy/
 *.md
 !README.md
 
+# Sample configuration and the developer's own nav.yaml, which lives at the
+# repository root and therefore changes on every local edit. The binary reads
+# config through --file/--source at runtime, never from the image, so shipping
+# these would cost a layer rebuild per content change for nothing.
+nav.yaml
+nav.*.yaml
+custom.css.example
+
 # Runtime state, never image content.
 ghome-cache.yaml
 *.tmp
