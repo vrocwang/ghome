@@ -12,7 +12,7 @@
 | forge 404 但文件明明在 | `--forge-ref` 或 `--forge-path` 不对 | 注意大小写；`--forge-path` 是仓内相对路径 |
 | push 了但页面要等一分钟 | webhook 没通，走的轮询 | 看网页钩子的"最近投递"：成功是 **202** |
 | webhook 报 401 | 密钥两边不一致 | 仓库设置里的密钥和 `--webhook-secret` 必须逐字符相同 |
-| webhook 报 202 但没更新 | 推的不是被监听的分支 | 看响应体里的 `"status":"ignored"` 和 reason |
+| webhook 报 202 但没更新 | 这次推送没有改动 nav.yaml 或 custom.css（重载照常发生，内容指纹相同就停在那里）；或 webhook 根本没投递到 | 日志里的 `config unchanged` 是前者；后者去 git 服务器的钩子"最近投递"看记录——若那边配了 Branch Filter，被它挡掉的投递对 ghome 完全不可见 |
 | 以为自己在跑 Gitea，其实是 Forgejo | `/api/v1/version` 报的 `16.0.5+gitea-1.22.0` 里，`+gitea-` 后是**兼容的 Gitea API 版本** | `curl 你的域名/api/forgejo/v1/version` 返回 200 就是 Forgejo |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或日志里的 `config warning`（无鉴权的 `/healthz` 不带告警） |
 | 改了颜色但页面没变 | 多半是 ghome 还没察觉这次推送，其次才轮到浏览器缓存 | 看进程日志里的 `config warning`；`/theme.css` 末端会写明 custom.css 的版本哈希 |

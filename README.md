@@ -362,7 +362,7 @@ HTTP 接口（含 `/healthz` 的完整返回）见 [`docs/http-api.md`](docs/htt
 | `gitea 401` / `403` | token 过期、撤销，或没有这个仓的读权限 | 重新生成，权限勾 `repository: read` |
 | forge 404 但文件明明在 | `--forge-ref` 或 `--forge-path` 不对 | 注意大小写；`--forge-path` 是仓内相对路径 |
 | push 了但页面要等一分钟 | webhook 没通，走的轮询 | 网页钩子的"最近投递"：成功是 **202**，401 是密钥不一致 |
-| webhook 报 202 但没更新 | 推的不是被监听的分支 | 看响应体里的 `"status":"ignored"` 和 reason |
+| webhook 报 202 但没更新 | 这次推送没有改动 nav.yaml 或 custom.css（重载照常发生，内容指纹相同就停在那里）；或 webhook 根本没投递到 | 日志里的 `config unchanged` 是前者；后者去 git 服务器的钩子"最近投递"看记录——若那边配了 Branch Filter，被它挡掉的投递对 ghome 完全不可见 |
 | 页面顶部出现黄条 | 配置里有拼错的字段或写不出的颜色 | 看提示条内容，或日志里的 `config warning` |
 | 图标都是字母头像 | 站点没有可解析的图标，或服务端取不到 | 用 `icon:` 显式指定，或把图标放进 `--icon-dir`；全部如此且 `iconsCached` 恒为 0 时先看是不是 `--icon-fetch=off` |
 | 放了本地图标却不生效 | 文件名或路径不对（必须是 `<host>` 加扩展名，host 不含端口） | 启动日志会报 `local icon directory ready, icons=N` |
