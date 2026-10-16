@@ -338,6 +338,74 @@ try {
   await send('Emulation.clearDeviceMetricsOverride');
   await evaluate(`document.documentElement.setAttribute('data-layout', ${JSON.stringify(shape.layout)})`);
 
+  /* ---------- the theme toggle actually changes the page ---------- */
+
+  // The toggle used to look broken: /theme.css emitted the config's light
+  // colours under :root AND :root[data-theme="dark"], so every colour the
+  // config named came back identical in dark mode and only the tokens it did
+  // not mention moved. Asserting data-theme alone misses that entirely -- the
+  // attribute changes, the page does not. So this compares what is actually
+  // painted on both sides of a click. The contrast floor is the other half of
+  // the promise: a theme that changes but cannot be read is not a theme.
+  const paint = `(() => {
+    const lum = (value) => {
+      // The tokens are hex by default but any CSS colour is allowed, so accept
+      // both spellings: hex first (its digits are not what a number scan finds),
+      // then the rgb()/rgba() triple.
+      const text = String(value).trim();
+      let parts = null;
+      const hex = text.match(/^#([0-9a-f]{6}|[0-9a-f]{3})$/i);
+      if (hex) {
+        const h = hex[1].length === 3 ? hex[1].replace(/./g, (c) => c + c) : hex[1];
+        parts = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
+      } else {
+        const nums = text.match(/[\d.]+/g);
+        if (nums && nums.length >= 3) parts = nums.slice(0, 3).map(Number);
+      }
+      if (!parts) return null;
+      const [r, g, b] = parts.map((v) => {
+        v /= 255;
+        return v <= 0.03928 ? v / 12.92 : Math.pow((v + 0.055) / 1.055, 2.4);
+      });
+      return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+    };
+    // body's background is a gradient (accent glow over --bg), so
+    // backgroundColor is transparent. The tokens are what it is painted from.
+    const cs = getComputedStyle(document.documentElement);
+    const fg = lum(cs.getPropertyValue('--text'));
+    const bg = lum(cs.getPropertyValue('--bg'));
+    const ratio = (fg === null || bg === null) ? 0
+      : Math.round((((Math.max(fg, bg) + 0.05) / (Math.min(fg, bg) + 0.05))) * 100) / 100;
+    return {
+      theme: document.documentElement.getAttribute('data-theme'),
+      tokens: cs.getPropertyValue('--bg').trim() + ' / ' + cs.getPropertyValue('--text').trim(),
+      bg: cs.getPropertyValue('--bg').trim(),
+      ratio,
+    };
+  })()`;
+
+  await send('Emulation.setEmulatedMedia', {
+    features: [{ name: 'prefers-color-scheme', value: 'light' }],
+  });
+  await evaluate(`(() => { try { localStorage.removeItem('ghome.theme'); } catch (e) {} })()`);
+  await send('Page.reload');
+  await sleep(2500); // back to the config's own render
+
+  const lightPaint = await evaluate(paint);
+  await evaluate(`document.getElementById('themeToggle').click()`);
+  await sleep(200);
+  await evaluate(`document.getElementById('themeToggle').click()`);
+  await sleep(300);
+  const darkPaint = await evaluate(paint);
+
+  check('the toggle reaches dark mode', darkPaint.theme === 'dark',
+    `${lightPaint.theme} -> ${darkPaint.theme}`);
+  check('dark mode repaints the page, not just the attribute',
+    lightPaint.bg !== darkPaint.bg,
+    `--bg stayed ${lightPaint.bg}; a style: block is feeding light colours to the dark theme`);
+  check('both themes are readable', lightPaint.ratio >= 4.5 && darkPaint.ratio >= 4.5,
+    `light ${lightPaint.ratio}:1, dark ${darkPaint.ratio}:1`);
+
   /* ---------- verdict ---------- */
 
   console.log('');
