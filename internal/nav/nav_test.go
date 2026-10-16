@@ -909,3 +909,52 @@ groups:
 		t.Errorf("link description = %q, want it trimmed", got)
 	}
 }
+
+// style.dark is validated like the light colours: usable keys survive with
+// their values canonicalised, and everything else is reported rather than
+// silently dropped -- a typo here would look like "dark mode ignores me".
+func TestDarkStyleOverrides(t *testing.T) {
+	cfg, warnings := parseWithWarnings(t, `
+style:
+  accent: "#ff6600"
+  dark:
+    accent: " #6f95ff "
+    Background: "#0b0d11"
+    radius: 30
+    nonsense: "#123456"
+    muted: "url(https://evil.example.com/leak)"
+`+minimalDoc)
+
+	if got := cfg.Style.Dark["accent"]; got != "#6f95ff" {
+		t.Errorf("dark accent = %q, want it trimmed", got)
+	}
+	// Keys are case-insensitive, which is worth pinning: the CSS property they
+	// map to is spelled lowercase and a lookup miss would drop the colour.
+	if got := cfg.Style.Dark["background"]; got != "#0b0d11" {
+		t.Errorf("dark background = %q, want it canonicalised to lowercase", got)
+	}
+	if _, ok := cfg.Style.Dark["radius"]; ok {
+		t.Error("dark radius survived; geometry is not themeable")
+	}
+	if _, ok := cfg.Style.Dark["nonsense"]; ok {
+		t.Error("an unknown colour key survived")
+	}
+	if _, ok := cfg.Style.Dark["muted"]; ok {
+		t.Error("a dangerous colour value survived")
+	}
+	if len(warnings) < 3 {
+		t.Errorf("warnings = %v, want one per rejected dark token", warnings)
+	}
+}
+
+// A config with no dark block must leave Style.Dark nil rather than an empty
+// map, so the renderer emits no dark selector at all.
+func TestNoDarkBlockLeavesNoOverrides(t *testing.T) {
+	cfg := mustParse(t, `
+style:
+  accent: "#ff6600"
+`+minimalDoc)
+	if cfg.Style.Dark != nil {
+		t.Errorf("Style.Dark = %v, want nil", cfg.Style.Dark)
+	}
+}

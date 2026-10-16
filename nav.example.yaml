@@ -27,13 +27,20 @@ layout: grid              # grid | dashboard | list，默认 grid
 # 设计令牌。它们由 /theme.css 以 CSS 变量发给浏览器，所以改样式不需要重新编译。
 # 任何一项写错只会被忽略并记一条 warning，不会让页面挂掉。
 style:
-  accent: "#3b6ef6"       # (内置) 主色。支持 #hex / rgb() / hsl() / 颜色关键字
-  background: "#f4f5f8"   # (内置) 页面底色
-  surface: "#ffffff"      # (内置) 卡片底色
-  text: "#14161b"         # (内置) 正文色
-  muted: "#646c7a"        # (内置) 次要文字色
-  border: "#e3e6ec"       # (内置) 描边色
-  font: "Inter, system-ui, sans-serif"   # (内置) 字体栈
+  # 下面这些颜色只作用于【浅色主题】。深色主题有自己的一套内置配色，不会跟着这里变——
+  # 想让深色也用自己的颜色，写下面的 dark: 块（没写的键继续用内置深色值）。
+  accent: "#3b6ef6"       # 主色。支持 #hex / rgb() / hsl() / 颜色关键字
+  background: "#f4f5f8"   # 页面底色
+  surface: "#ffffff"      # 卡片底色
+  text: "#14161b"         # 正文色
+  muted: "#646c7a"        # 次要文字色
+  border: "#e3e6ec"       # 描边色
+  font: "Inter, system-ui, sans-serif"   # 字体栈（两个主题共用）
+  # 深色主题的颜色覆盖，只接受颜色键：accent / background / surface / text / muted / border。
+  # 默认注释掉：不写就完全用内置深色配色。
+  # dark:
+  #   accent: "#6f95ff"
+  #   background: "#0d0f13"
   radius: 16              # (16) 圆角，像素，0~48
   fontSize: 15            # (15) 正文字号，像素，11~24
   width: 1240             # (1240) 内容最大宽度，像素，480~3840

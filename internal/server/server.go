@@ -11,6 +11,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"path"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -500,30 +502,63 @@ func (s *Server) handleThemeCSS(w http.ResponseWriter, r *http.Request) {
 	_, _ = io.WriteString(w, b.String())
 }
 
-// writeThemeTokens renders the non-empty style tokens.
+// writeThemeTokens renders the non-empty style tokens as two blocks.
 //
-// The selector list repeats the dark theme on purpose: the built-in stylesheet
-// declares its dark values under :root[data-theme="dark"], which has the same
-// specificity as ours, so ours only wins by coming later. Matching both
-// selectors keeps a user-set accent from being ignored in dark mode.
+// The first holds what is the same in both themes: fonts, geometry, spacing,
+// card shadows. It is emitted for :root, so it wins over the built-in tokens by
+// coming later in the cascade.
+//
+// The second holds colours, and it is emitted for :root WITHOUT the dark
+// selector. That is the whole point: a colour written for the light theme says
+// nothing about how the dark one should look, and repeating it under
+// :root[data-theme="dark"] is what made the theme toggle look broken -- every
+// colour it named came back identical in dark mode, leaving only the handful of
+// tokens the config happened not to set. style.dark overrides individual
+// colours for dark mode; whatever it leaves out keeps the built-in dark value.
 func writeThemeTokens(b *strings.Builder, style nav.Style) {
 	type token struct {
 		name  string
 		value string
 	}
-	var tokens []token
+	var shared []token
 	add := func(name, value string) {
 		if value != "" {
-			tokens = append(tokens, token{name, value})
+			shared = append(shared, token{name, value})
 		}
 	}
 
-	add("--accent", style.Accent)
-	add("--bg", style.Background)
-	add("--surface", style.Surface)
-	add("--text", style.Text)
-	add("--muted", style.Muted)
-	add("--border", style.Border)
+	// light and dark are keyed by custom property so the two blocks cannot drift
+	// apart, and so style.dark can override one colour without re-listing the rest.
+	light := map[string]string{}
+	dark := map[string]string{}
+	for _, c := range []struct{ prop, value string }{
+		{"--accent", style.Accent},
+		{"--bg", style.Background},
+		{"--surface", style.Surface},
+		{"--text", style.Text},
+		{"--muted", style.Muted},
+		{"--border", style.Border},
+	} {
+		if c.value != "" {
+			light[c.prop] = c.value
+		}
+	}
+	darkProps := map[string]string{
+		"accent":     "--accent",
+		"background": "--bg",
+		"surface":    "--surface",
+		"text":       "--text",
+		"muted":      "--muted",
+		"border":     "--border",
+	}
+	for name, value := range style.Dark {
+		// nav normalises the key and validates the value; this only maps the
+		// config's spelling onto the custom property it stands for.
+		if prop, ok := darkProps[name]; ok && value != "" {
+			dark[prop] = value
+		}
+	}
+
 	add("--font-family", style.Font)
 
 	if style.Radius > 0 {
@@ -561,16 +596,32 @@ func writeThemeTokens(b *strings.Builder, style nav.Style) {
 		add("--card-shadow-hover", "0 10px 34px rgba(16,24,40,.18)")
 	}
 
-	if len(tokens) == 0 {
-		return
+	writeBlock := func(selector string, props map[string]string) {
+		if len(props) == 0 {
+			return
+		}
+		fmt.Fprintf(b, "%s {\n", selector)
+		for _, name := range slices.Sorted(maps.Keys(props)) {
+			fmt.Fprintf(b, "  %s: %s;\n", name, props[name])
+		}
+		b.WriteString("}\n")
 	}
-	sort.Slice(tokens, func(i, j int) bool { return tokens[i].name < tokens[j].name })
 
-	b.WriteString("/* generated from nav.yaml style: */\n:root, :root[data-theme=\"dark\"] {\n")
-	for _, t := range tokens {
-		fmt.Fprintf(b, "  %s: %s;\n", t.name, t.value)
+	if len(shared) > 0 || len(light) > 0 {
+		b.WriteString("/* generated from nav.yaml style: */\n")
 	}
-	b.WriteString("}\n")
+	if len(shared) > 0 {
+		sort.Slice(shared, func(i, j int) bool { return shared[i].name < shared[j].name })
+		fmt.Fprintf(b, ":root {\n")
+		for _, t := range shared {
+			fmt.Fprintf(b, "  %s: %s;\n", t.name, t.value)
+		}
+		b.WriteString("}\n")
+	}
+	// Light colours first, so a dark override of the same property wins by
+	// coming later in the file.
+	writeBlock(":root", light)
+	writeBlock(`:root[data-theme="dark"]`, dark)
 }
 
 // handleEvents streams changes to the browser over SSE. The browser therefore

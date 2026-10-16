@@ -95,6 +95,14 @@ type Style struct {
 	// CardStyle is "soft" (default), "flat" or "strong".
 	CardStyle string `yaml:"cardStyle" json:"cardStyle,omitempty"`
 
+	// Dark overrides any of the colour keys above for the dark theme only, for
+	// example `dark: { background: "#0b0d11" }`. Whatever it leaves out keeps
+	// the built-in dark value rather than the light one, because a colour set
+	// for the light theme says nothing about what it should look like in the
+	// dark -- reusing it is exactly what made switching themes look broken.
+	// Keys are the colour names above; anything else is reported and ignored.
+	Dark map[string]string `yaml:"dark" json:"dark,omitempty"`
+
 	// CustomCSS names a file in the same repository, for example
 	// "custom.css". Its contents are appended to /theme.css, so a full
 	// restyle rides the same push-to-update path as the rest of the config.
@@ -841,6 +849,31 @@ func (c *Config) normalizeStyle(warn func(string, ...any)) {
 		s.Font = ""
 	}
 
+	// Dark is validated with the same rules as the light colours, and unknown
+	// keys are named rather than dropped in silence: a typo here would otherwise
+	// look like "dark mode ignores my colour".
+	for name, v := range s.Dark {
+		v = strings.TrimSpace(v)
+		key := strings.ToLower(strings.TrimSpace(name))
+		switch {
+		case !darkStyleColor(key):
+			warn("style.dark: %q is not a colour token, ignored (expected accent, background, surface, text, muted or border)", name)
+			delete(s.Dark, name)
+		case v == "":
+			delete(s.Dark, name)
+		case !CSSColor(v):
+			warn("style.dark.%s: %q is not a usable css colour, ignored", key, v)
+			delete(s.Dark, name)
+		default:
+			// Canonicalise the key so the renderer's lookup is a plain map get.
+			delete(s.Dark, name)
+			s.Dark[key] = v
+		}
+	}
+	if len(s.Dark) == 0 {
+		s.Dark = nil
+	}
+
 	s.Density = strings.ToLower(strings.TrimSpace(s.Density))
 	switch s.Density {
 	case "", "comfortable", "compact":
@@ -919,6 +952,17 @@ func checkURL(raw string) error {
 		return errors.New("missing host")
 	}
 	return nil
+}
+
+// darkStyleColor reports whether key names a colour the dark theme may
+// override. Only colours: geometry and typography are the same in both themes,
+// and a dark-only radius would be a surprise rather than a feature.
+func darkStyleColor(key string) bool {
+	switch key {
+	case "accent", "background", "surface", "text", "muted", "border":
+		return true
+	}
+	return false
 }
 
 // usableIcon reports whether an icon value is something the browser can render:

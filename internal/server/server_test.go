@@ -457,11 +457,72 @@ style:
 			t.Errorf("theme.css is missing %q\n%s", want, body)
 		}
 	}
-	// Dark mode must be covered too, or a configured accent would be ignored
-	// whenever the user is in dark mode.
-	if !strings.Contains(body, `:root[data-theme="dark"]`) {
-		t.Errorf("theme.css does not cover dark mode:\n%s", body)
+	// A light colour must not be repeated for dark mode: doing that erased every
+	// colour the config named and left the theme toggle looking broken. With no
+	// style.dark block there is nothing dark-specific to emit at all.
+	if strings.Contains(body, `[data-theme="dark"]`) {
+		t.Errorf("a light-only style block must not emit a dark override:\n%s", body)
 	}
+}
+
+// style.dark is how a config colours dark mode deliberately. A key it leaves
+// out must stay out, so the built-in dark value survives instead of being
+// replaced by the light one.
+func TestThemeCSSEmitsDarkOverridesOnlyForWhatIsSet(t *testing.T) {
+	st := styledStore(t, `
+style:
+  accent: "#ff6600"
+  background: "#ffffff"
+  dark:
+    accent: "#ffb066"
+    surface: "#101216"
+    radius: 30
+    nonsense: "#123456"
+`+goodDoc)
+
+	srv, _ := newTestServer(t, Options{Store: st})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/theme.css", nil))
+	body := rec.Body.String()
+
+	light := blockFor(t, body, ":root {")
+	if !strings.Contains(light, "--accent: #ff6600;") || !strings.Contains(light, "--bg: #ffffff;") {
+		t.Errorf("light block is missing its colours:\n%s", light)
+	}
+	dark := blockFor(t, body, `:root[data-theme="dark"] {`)
+	for _, want := range []string{"--accent: #ffb066;", "--surface: #101216;"} {
+		if !strings.Contains(dark, want) {
+			t.Errorf("dark block is missing %q:\n%s", want, dark)
+		}
+	}
+	// --bg was set for light only, so the built-in dark background must win.
+	if strings.Contains(dark, "--bg:") {
+		t.Errorf("dark block repeated a light-only colour:\n%s", dark)
+	}
+	// Geometry and typography are the same in both themes: a dark-only radius
+	// would be a surprise rather than a feature, so style.dark.radius is not a
+	// colour token and never reaches the stylesheet.
+	if strings.Contains(dark, "--radius") {
+		t.Errorf("dark block carried a non-colour token:\n%s", dark)
+	}
+	if strings.Contains(body, "--radius: 30px;") {
+		t.Errorf("style.dark.radius was applied as a colour:\n%s", body)
+	}
+}
+
+// blockFor returns the body of the first CSS block whose header is header.
+func blockFor(t *testing.T, css, header string) string {
+	t.Helper()
+	i := strings.Index(css, header)
+	if i < 0 {
+		t.Fatalf("no %q block in:\n%s", header, css)
+	}
+	rest := css[i+len(header):]
+	j := strings.Index(rest, "}")
+	if j < 0 {
+		t.Fatalf("unterminated block after %q", header)
+	}
+	return rest[:j]
 }
 
 func TestThemeCSSIsValidWithNoStyleBlock(t *testing.T) {
