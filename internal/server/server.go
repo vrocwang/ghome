@@ -41,7 +41,8 @@ var webRoot embed.FS
 // without a live cache.
 type IconSource interface {
 	Lookup(ctx context.Context, pageURL string) (data []byte, contentType string, ok bool)
-	Stats() (entries int, hits, misses uint64)
+	// Stats reports how many icons are cached, for /healthz.
+	Stats() int
 }
 
 // StatusSource is the health prober as the HTTP layer needs it. Snapshot
@@ -819,13 +820,12 @@ type healthState struct {
 
 	IconsCached int `json:"iconsCached,omitempty"`
 
-	Warnings  []string `json:"warnings,omitempty"`
-	LastError string   `json:"lastError,omitempty"`
+	LastError string `json:"lastError,omitempty"`
 }
 
 // handleHealth is unauthenticated, so it describes the public view only.
 //
-// It uses to leak what /api/nav carefully withholds: the warnings name the entry
+// It used to leak what /api/nav carefully withholds: the warnings name the entry
 // they came from ("groups[1].links[0] (财务系统).hotkey: ..."), and the probe
 // counters covered every target, private ones included. Everything below is
 // therefore derived from Payload.Public, the same value an anonymous /api/nav
@@ -866,13 +866,17 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 		state.ProbesUp, state.ProbesDown = up, down
 	}
 	if s.opts.Icons != nil {
-		state.IconsCached, _, _ = s.opts.Icons.Stats()
+		state.IconsCached = s.opts.Icons.Stats()
 	}
 
-	// Warnings come from the most recent attempt, so a typo is visible even
-	// while a previously good config is still being served. The public view has
-	// already dropped the ones that name a withheld entry.
-	state.Warnings = visible.Meta.Warnings
+	// No warnings field: a payload's warnings name the entry they came from
+	// ("groups[1].links[0] (日记).hotkey: ..."), and visible is payload.Public(),
+	// which drops the whole list rather than deciding which names are safe to
+	// repeat on an endpoint that answers without a token. The operator gets them
+	// from the log and, once unlocked, from /api/nav.
+	//
+	// lastError stays: it is what tells a monitor "degraded" from "ok", and the
+	// parser never puts a value or an entry name in it.
 
 	if err := s.store.LastError(); err != nil {
 		state.LastError = err.Error()

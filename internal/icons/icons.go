@@ -117,12 +117,10 @@ type Resolver struct {
 	// whole on every Allow, so a lookup never sees a half-updated list.
 	allowed map[string]struct{}
 
-	mu     sync.Mutex
-	lru    *list.List
-	byKey  map[string]*list.Element
-	bytes  int64 // total cached icon bytes, kept in step with the list
-	hits   uint64
-	misses uint64
+	mu    sync.Mutex
+	lru   *list.List
+	byKey map[string]*list.Element
+	bytes int64 // total cached icon bytes, kept in step with the list
 
 	flights flightGroup
 
@@ -220,7 +218,6 @@ func (r *Resolver) Lookup(ctx context.Context, pageURL string) (Icon, bool) {
 	// A local file is the operator's explicit answer for this host, so it wins
 	// over both the cache and the network.
 	if icon, ok := r.local(host); ok {
-		r.countHit()
 		return icon, true
 	}
 
@@ -233,10 +230,8 @@ func (r *Resolver) Lookup(ctx context.Context, pageURL string) (Icon, bool) {
 
 	key := u.String()
 	if icon, ok, fresh := r.get(key); fresh {
-		r.countHit()
 		return icon, ok
 	}
-	r.countMiss()
 
 	// The cache is filled inside the flight, before the flight is forgotten:
 	// otherwise a lookup that slipped past the map could fetch the same icon
@@ -280,12 +275,13 @@ func (r *Resolver) Warm(ctx context.Context, pageURLs []string) {
 	go r.warm(ctx, pending)
 }
 
-// Stats reports counters for the /healthz endpoint. entries counts every
-// cached answer, negative ones included.
-func (r *Resolver) Stats() (entries int, hits, misses uint64) {
+// Stats reports how many answers the cache holds, for the /healthz endpoint.
+// A remembered failure counts like any other answer: it takes a slot, and it is
+// what an operator sees when a config's hosts turn out to have no favicons.
+func (r *Resolver) Stats() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.lru.Len(), r.hits, r.misses
+	return r.lru.Len()
 }
 
 // warm drains urls with at most warmWorkers goroutines. It always finishes:
@@ -349,7 +345,12 @@ func (r *Resolver) pending(pageURLs []string) []string {
 		// the cache and the network. Warming it anyway would fetch a page and an
 		// icon that can never be served -- which would leave --icon-dir costing
 		// exactly the traffic it was set up to avoid.
-		if r.hasLocal(u.Hostname()) {
+		//
+		// hasLocal is asked about the lowercased host, the same spelling Lookup
+		// and local() use: on a case-sensitive filesystem asking about the raw
+		// host would miss the file the lookup will actually serve, and the warm
+		// pass would run for a host that never needed it.
+		if r.hasLocal(strings.ToLower(u.Hostname())) {
 			continue
 		}
 		out = append(out, key)
@@ -445,14 +446,18 @@ func (r *Resolver) local(host string) (Icon, bool) {
 // hasLocal reports whether Dir holds an icon for host, without reading the
 // bytes. Warm uses it to skip a host that local() would answer before the
 // network is ever consulted.
+//
+// It has to accept exactly what local() accepts, size cap included. A file
+// local() refuses is one Lookup will go to the network for, so treating it as
+// "handled locally" would only skip the warm pass and make the first page load
+// pay for the fetch instead. host is expected lowercased, as local() takes it.
 func (r *Resolver) hasLocal(host string) bool {
 	if r.opts.Dir == "" || !safeHostName(host) {
 		return false
 	}
 	for _, ext := range localExts {
-		// Size matters: local() refuses a zero-byte file, so treating one as
-		// "handled locally" would leave the host with no icon and no fetch.
-		if info, err := os.Stat(filepath.Join(r.opts.Dir, host+ext)); err == nil && !info.IsDir() && info.Size() > 0 {
+		info, err := os.Stat(filepath.Join(r.opts.Dir, host+ext))
+		if err == nil && !info.IsDir() && info.Size() > 0 && info.Size() <= r.opts.MaxBytes {
 			return true
 		}
 	}
@@ -649,18 +654,6 @@ func (r *Resolver) removeLocked(el *list.Element) {
 	delete(r.byKey, e.key)
 }
 
-func (r *Resolver) countHit() {
-	r.mu.Lock()
-	r.hits++
-	r.mu.Unlock()
-}
-
-func (r *Resolver) countMiss() {
-	r.mu.Lock()
-	r.misses++
-	r.mu.Unlock()
-}
-
 // call is one in-flight resolution shared by every Lookup that asked for the
 // same page while it ran.
 type call struct {
@@ -717,9 +710,6 @@ func (g *flightGroup) do(key string, fn func() (Icon, bool)) (Icon, bool) {
 	return c.icon, c.ok
 }
 
-// newClient builds the upstream client. The redirect policy is the one place a
-// hostile response could steer us somewhere we would never fetch directly, so
-// anything that is not http(s) is refused.
 // newClient builds the HTTP client used for every fetch. allowed decides which
 // hosts may still be reached after a redirect: the first request is checked
 // against the allow list by the caller, but the redirect target is chosen by
@@ -789,9 +779,17 @@ func LocalIcons(dir string) (int, error) {
 			continue
 		}
 		host := strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name()))
-		if safeHostName(strings.ToLower(host)) {
-			count++
+		if !safeHostName(strings.ToLower(host)) {
+			continue
 		}
+		// The size rule local() and readLocal apply, or the count would include
+		// a file the resolver refuses -- and the startup line would report an
+		// icon for a host that still has to fetch one.
+		info, err := entry.Info()
+		if err != nil || info.Size() <= 0 || info.Size() > defaultMaxBytes {
+			continue
+		}
+		count++
 	}
 	return count, nil
 }

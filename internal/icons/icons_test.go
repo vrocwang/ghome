@@ -322,9 +322,6 @@ func TestLookupUsesLocalDirWithoutNetwork(t *testing.T) {
 	if s.total() != 0 {
 		t.Errorf("a local icon still hit the network: %v", s.seen())
 	}
-	if _, hits, _ := r.Stats(); hits == 0 {
-		t.Error("Stats() reported no hits for a locally served icon")
-	}
 }
 
 // autoOff builds a resolver with fetching disabled. Tests use it to prove that
@@ -349,7 +346,7 @@ func TestAutoOffNeverFetches(t *testing.T) {
 	if s.total() != 0 {
 		t.Errorf("fetching off still reached the network: %v", s.seen())
 	}
-	if entries, _, _ := r.Stats(); entries != 0 {
+	if entries := r.Stats(); entries != 0 {
 		t.Errorf("cache holds %d entries with fetching off, want 0 (nothing may be remembered as fetched)", entries)
 	}
 }
@@ -404,7 +401,7 @@ func TestWarmDoesNothingWithAutoOff(t *testing.T) {
 	if s.total() != 0 {
 		t.Errorf("Warm fetched with auto off: %v", s.seen())
 	}
-	if entries, _, _ := r.Stats(); entries != 0 {
+	if entries := r.Stats(); entries != 0 {
 		t.Errorf("Warm cached %d entries with auto off, want 0", entries)
 	}
 }
@@ -502,9 +499,10 @@ func TestNegativeCaching(t *testing.T) {
 		t.Fatalf("Warm() retried a remembered failure: requests grew from %d to %d", first, got)
 	}
 
-	entries, hits, misses := r.Stats()
-	if entries != 1 || misses != 1 || hits != 5 {
-		t.Errorf("Stats() = (%d entries, %d hits, %d misses), want (1, 5, 1)", entries, hits, misses)
+	// The remembered failure is the only thing in the cache. That repeated
+	// lookups never went upstream is what the count checks above already prove.
+	if entries := r.Stats(); entries != 1 {
+		t.Errorf("Stats() entries = %d, want 1 (the remembered failure)", entries)
 	}
 }
 
@@ -700,12 +698,12 @@ func TestLRUBoundsEntries(t *testing.T) {
 		if _, ok := r.Lookup(context.Background(), key(i)); !ok {
 			t.Fatalf("Lookup(%q) = false", key(i))
 		}
-		if entries, _, _ := r.Stats(); entries > 3 {
+		if entries := r.Stats(); entries > 3 {
 			t.Fatalf("Stats() entries = %d after %d lookups, want <= 3", entries, i+1)
 		}
 	}
 
-	entries, _, _ := r.Stats()
+	entries := r.Stats()
 	if entries != 3 {
 		t.Fatalf("Stats() entries = %d, want 3", entries)
 	}
@@ -748,11 +746,11 @@ func TestWarmResolvesAndBoundsConcurrency(t *testing.T) {
 
 	deadline := time.Now().Add(15 * time.Second)
 	for {
-		if entries, _, _ := r.Stats(); entries == n {
+		if entries := r.Stats(); entries == n {
 			break
 		}
 		if time.Now().After(deadline) {
-			entries, _, _ := r.Stats()
+			entries := r.Stats()
 			t.Fatalf("Warm resolved %d of %d icons", entries, n)
 		}
 		time.Sleep(5 * time.Millisecond)
@@ -831,23 +829,27 @@ func TestWarmDoesNotLeakOnCancelledContext(t *testing.T) {
 	}
 }
 
+// Stats reports how many answers the cache holds, and nothing else. The second
+// Lookup being answered from it is what the upstream count proves; a cache that
+// had quietly refetched would show 2 here while the entry count stayed 1.
 func TestStatsCounts(t *testing.T) {
 	s := iconSite(t)
 	r := testResolver(t, Options{})
 	r.Allow([]string{s.URL})
 
-	if entries, hits, misses := r.Stats(); entries != 0 || hits != 0 || misses != 0 {
-		t.Fatalf("Stats() on a fresh resolver = (%d, %d, %d), want zeroes", entries, hits, misses)
+	if entries := r.Stats(); entries != 0 {
+		t.Fatalf("Stats() on a fresh resolver = %d, want 0", entries)
 	}
-	if _, ok := r.Lookup(context.Background(), s.URL); !ok {
-		t.Fatal("Lookup() = false")
+	for i := 0; i < 2; i++ {
+		if _, ok := r.Lookup(context.Background(), s.URL); !ok {
+			t.Fatalf("Lookup() #%d = false", i+1)
+		}
 	}
-	if _, ok := r.Lookup(context.Background(), s.URL); !ok {
-		t.Fatal("Lookup() = false")
+	if entries := r.Stats(); entries != 1 {
+		t.Errorf("Stats() entries = %d, want 1", entries)
 	}
-	entries, hits, misses := r.Stats()
-	if entries != 1 || hits != 1 || misses != 1 {
-		t.Errorf("Stats() = (%d, %d, %d), want (1, 1, 1)", entries, hits, misses)
+	if got := s.hits("/favicon.ico"); got != 1 {
+		t.Errorf("upstream fetches = %d, want 1: the second lookup was not served from the cache", got)
 	}
 }
 

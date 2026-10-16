@@ -162,14 +162,6 @@ func (p *Prober) SetTargets(urls []string) {
 	p.log.Debug("status targets updated", "targets", len(targets))
 }
 
-// Run probes on a timer until ctx is cancelled. It blocks the calling goroutine
-// and must be called at most once per Prober.
-//
-// One round runs immediately, then one round per Interval. onChange is called
-// after a round only when at least one result actually changed, so a state flip
-// can be pushed to browsers over SSE without every round broadcasting identical
-// data. The first round counts as a change, so clients learn the initial
-// states. onChange may be nil.
 // Close releases the idle sockets the prober has pooled. A prober that is being
 // replaced would otherwise keep its transport alive for the idle timeout, which
 // shows up as a slow climb in goroutines on a box that reloads often.
@@ -179,6 +171,14 @@ func (p *Prober) Close() {
 	}
 }
 
+// Run probes on a timer until ctx is cancelled. It blocks the calling goroutine
+// and must be called at most once per Prober.
+//
+// One round runs immediately, then one round per Interval. onChange is called
+// after a round only when at least one result actually changed, so a state flip
+// can be pushed to browsers over SSE without every round broadcasting identical
+// data. The first round counts as a change, so clients learn the initial
+// states. onChange may be nil.
 func (p *Prober) Run(ctx context.Context, onChange func()) {
 	if ctx.Err() != nil {
 		return
@@ -216,11 +216,10 @@ func (p *Prober) Results() map[string]Result {
 	return out
 }
 
-// Snapshot returns the probe results in the shape the HTTP layer marshals to
-// /api/status. It is the same data as Results, typed so *Prober satisfies the
-// server's StatusSource interface.
-// Snapshot returns the results to publish. allow lists the URLs the caller may
-// see, and nil means no restriction.
+// Snapshot returns the results to publish in the shape the HTTP layer marshals
+// to /api/status. allow lists the URLs the caller may see, and nil means no
+// restriction. It is the same data as Results, typed and filtered so *Prober
+// satisfies the server's StatusSource interface.
 func (p *Prober) Snapshot(allow map[string]struct{}) any {
 	if allow == nil {
 		return p.Results()
@@ -398,7 +397,12 @@ func resultSetChanged(prev, next map[string]Result) bool {
 }
 
 // probe performs one URL probe: HEAD, then a single GET when HEAD is not
-// supported or failed below HTTP. It is safe to call from many goroutines.
+// supported or did not reach the HTTP layer. It is safe to call from many
+// goroutines.
+//
+// The GET is skipped when the shared deadline is already gone. A service that
+// answers HEAD by hanging therefore counts as down rather than getting a second
+// full budget: "it did not answer in time" is the same verdict either verb.
 func (p *Prober) probe(ctx context.Context, target string) Result {
 	start := time.Now()
 
@@ -449,8 +453,13 @@ func (p *Prober) fetch(ctx context.Context, target, method string) (int, error) 
 }
 
 // headUnsupported reports whether a HEAD status means "ask with GET instead"
-// rather than "this service is down": plenty of frameworks reject HEAD with a
-// 4xx or a 501 no matter how healthy the service is.
+// rather than "this service is down": plenty of frameworks answer HEAD with a
+// 400 or a 405, and a few with a 501, no matter how healthy the service is.
+//
+// Only those three: a 404 or a 406 to HEAD is left as the service's answer,
+// because a GET that would have succeeded anyway is indistinguishable here from
+// one that would not, and reading every 4xx as "try again" would double the
+// probe traffic of every genuinely missing page.
 func headUnsupported(code int) bool {
 	switch code {
 	case http.StatusBadRequest, http.StatusMethodNotAllowed, http.StatusNotImplemented:

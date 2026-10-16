@@ -737,7 +737,7 @@ func (f *fakeIcons) Lookup(_ context.Context, pageURL string) ([]byte, string, b
 	return f.data, f.ct, f.ok
 }
 
-func (f *fakeIcons) Stats() (int, uint64, uint64) { return 1, 0, 0 }
+func (f *fakeIcons) Stats() int { return 1 }
 
 func TestIconEndpoint(t *testing.T) {
 	t.Run("serves an icon for a configured host", func(t *testing.T) {
@@ -885,7 +885,10 @@ func TestStatusEndpoint(t *testing.T) {
 	})
 }
 
-func TestHealthzReportsWarnings(t *testing.T) {
+// A tolerated config problem must not fail the page, and it must not be
+// published by the one endpoint that answers without a token: a warning names
+// the entry it came from ("groups[0].links[0] (日记).hotkey: ...").
+func TestHealthzCarriesNoWarnings(t *testing.T) {
 	st := styledStore(t, `
 titel: 顶层拼错了
 groups:
@@ -909,11 +912,14 @@ groups:
 	if state.Status != "ok" {
 		t.Errorf("Status = %q, want ok: a tolerated typo is not an outage", state.Status)
 	}
-	// /healthz is unauthenticated and a warning names the entry it came from
-	// ("groups[0].links[0] (日记).hotkey: ..."), so the response carries none of
-	// them. The operator still gets the full list in the log.
-	if len(state.Warnings) != 0 {
-		t.Errorf("warnings = %v, want none on an unauthenticated endpoint", state.Warnings)
+	// Asserted on the wire, not through a struct field: a field that is always
+	// empty proves nothing about the response.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if _, present := raw["warnings"]; present {
+		t.Errorf("the response carried warnings: %s", strings.TrimSpace(rec.Body.String()))
 	}
 	// The warning itself still has to exist somewhere: /api/nav carries it for
 	// an unlocked caller, and the watcher logs it.

@@ -521,8 +521,15 @@ groups:
 	if state.Groups != 1 || state.Links != 1 {
 		t.Errorf("groups/links = %d/%d, want the public 1/1", state.Groups, state.Links)
 	}
-	if len(state.Warnings) != 0 {
-		t.Errorf("warnings = %v, want none: they name the entry they came from", state.Warnings)
+	// No warnings field either. The tolerated two-character hotkey produced one
+	// naming the entry, and the field is asserted absent on the wire rather than
+	// through a struct member that could never hold anything.
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &raw); err != nil {
+		t.Fatalf("bad JSON: %v", err)
+	}
+	if _, present := raw["warnings"]; present {
+		t.Errorf("warnings = %s, want none: they name the entry they came from", raw["warnings"])
 	}
 }
 

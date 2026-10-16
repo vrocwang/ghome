@@ -8,7 +8,8 @@
 ## 凭据
 
 - forge token 只存在服务端：内存或环境变量里，**不进 URL、不进日志、不进响应**。
-- 每个 flag 都有同名的 `GHOME_*` 环境变量，就是为了让 token 不出现在 `ps` 里。
+- 每个**配置类** flag 都有同名的 `GHOME_*` 环境变量，就是为了让 token 不出现在 `ps` 里
+  （三个一次性动作 `--dump-web` / `--healthcheck` / `--version` 除外，它们跑完就退出）。
 - 访问日志**只记路径、不记查询串**：`/api/icon` 的 query 里可能有链接自带的 token。
 - 私密链接的解锁令牌也存在浏览器 `sessionStorage` 而不是 cookie：没有 cookie 就没有 CSRF 面，
   关掉标签页即登出，服务端也不需要签名或会话存储。判定按令牌的 sha256 缓存，令牌本身不落盘。

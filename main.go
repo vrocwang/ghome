@@ -281,7 +281,7 @@ func (a iconAdapter) Lookup(ctx context.Context, pageURL string) ([]byte, string
 	return icon.Data, icon.ContentType, ok
 }
 
-func (a iconAdapter) Stats() (int, uint64, uint64) { return a.r.Stats() }
+func (a iconAdapter) Stats() int { return a.r.Stats() }
 
 // prober supervises the service health prober across config reloads.
 //
