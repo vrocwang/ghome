@@ -102,7 +102,7 @@ docker buildx build --platform linux/amd64,linux/arm64 -t ghome --push .
 
 ### 这些参数在容器里怎么给
 
-20 个 flag 在容器里分三类，给法不一样：
+21 个 flag 在容器里分三类，给法不一样：
 
 | 类型 | 有哪些 | 怎么给 |
 | --- | --- | --- |
