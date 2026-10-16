@@ -84,25 +84,11 @@ func (s *Server) handleWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Ignore pushes to other branches: only the branch we actually read from
-	// should cause a reload.
-	//
-	// The filter may be a bare name or a full ref, and both spellings of the
-	// pushed ref have to be accepted: a --branch written as "refs/heads/main"
-	// used to be pasted onto another prefix and never matched, which ignored
-	// every push while still answering 202 -- a silent freeze, the worst way for
-	// an update path to fail. A full ref in the option is matched exactly, so a
-	// config pinned to a tag keeps reloading on that tag.
-	if !matchesRef(s.opts.Branch, payload.Ref) {
-		s.log.Info("webhook ignored: push is for another ref",
-			"ref", payload.Ref, "want", s.opts.Branch, "remote", clientIP(r))
-		s.writeJSON(w, http.StatusAccepted, map[string]string{
-			"status": "ignored",
-			"reason": "ref " + payload.Ref + " is not " + s.opts.Branch,
-		})
-		return
-	}
-
+	// Any push reloads. There is no branch filter here on purpose: a git server
+	// can filter deliveries per webhook, which is both stronger (globs, one
+	// filter per consumer) and cheaper (the request is never sent), and ghome
+	// reads one ref anyway. A push that changed nothing costs one fetch, and the
+	// watcher's fingerprint comparison stops it there.
 	if s.opts.Trigger != nil {
 		s.opts.Trigger()
 	}
@@ -168,22 +154,6 @@ func hmacMatches(sig string, body []byte, secret string, hash func() hash.Hash, 
 
 func constantTimeEqual(a, b string) bool {
 	return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1
-}
-
-// matchesRef reports whether a push to ref should reload, given the configured
-// filter. Both spellings of the pushed ref are accepted for a bare filter name;
-// a full ref in the filter ("refs/tags/v1.0") is matched exactly.
-func matchesRef(want, ref string) bool {
-	want, ref = strings.TrimSpace(want), strings.TrimSpace(ref)
-	if want == "" || ref == "" {
-		// No filter, or a payload that does not say which ref moved: reloading
-		// is the safe direction -- a missed update is worse than a spare poll.
-		return true
-	}
-	if strings.HasPrefix(want, "refs/") {
-		return ref == want
-	}
-	return ref == want || ref == "refs/heads/"+want || ref == "refs/tags/"+want
 }
 
 func shorten(sha string) string {

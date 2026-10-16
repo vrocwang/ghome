@@ -6,7 +6,7 @@
 # Where things go:
 #
 #   * Every *setting* lives in ghome.env, which this file reads as env_file.
-#     That is the complete configuration surface -- there are 19 variables and
+#     That is the complete configuration surface -- there are 18 variables and
 #     the example file documents all of them.
 #   * Anything that needs a host directory needs a volume here as well, and the
 #     two halves have to agree on the path *inside* the container.

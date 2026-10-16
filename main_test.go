@@ -18,7 +18,6 @@ import (
 	"time"
 
 	"github.com/vrocwang/ghome/internal/nav"
-	"github.com/vrocwang/ghome/internal/source"
 	"github.com/vrocwang/ghome/internal/status"
 	"github.com/vrocwang/ghome/internal/store"
 )
@@ -135,25 +134,6 @@ func TestParseIconFetch(t *testing.T) {
 func TestFetchLabel(t *testing.T) {
 	if fetchLabel(true) != "auto" || fetchLabel(false) != "off" {
 		t.Error("fetchLabel() is wrong")
-	}
-}
-
-func TestLooksLikeCommit(t *testing.T) {
-	sha1Ref := strings.Repeat("0123456789abcdef", 2) + "01234567" // 40 chars
-	cases := map[string]bool{
-		"main":                   false,
-		"v1.2.3":                 false,
-		"feature/nav":            false,
-		sha1Ref:                  true,  // full SHA-1
-		strings.ToUpper(sha1Ref): true,  // upper case
-		strings.Repeat("0", 64):  true,  // SHA-256
-		sha1Ref[:39]:             false, // one short
-		sha1Ref[:39] + "z":       false, // not hex
-	}
-	for ref, want := range cases {
-		if got := looksLikeCommit(ref); got != want {
-			t.Errorf("looksLikeCommit(%q) = %v, want %v", ref, got, want)
-		}
 	}
 }
 
@@ -565,59 +545,6 @@ func TestProberIsGivenItsTargetsBeforeItsFirstRound(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Error("no target was probed: the first round ran before the targets were set, " +
 			"so the status lights stay unknown until the next interval")
-	}
-}
-
-// The webhook compares the pushed ref against server.Options.Branch, which
-// main.go derives from --branch / --forge-ref. A value that still carries its
-// "refs/heads/" prefix used to be pasted onto another one and never matched, so
-// every push was ignored while the endpoint still answered 202.
-func TestRefFilterKeepsFullRefs(t *testing.T) {
-	gitea := func(ref string) source.Source {
-		t.Helper()
-		s, err := source.NewGitea(source.GiteaOptions{
-			BaseURL: "https://git.example.com", Owner: "a", Repo: "b", Ref: ref,
-		})
-		if err != nil {
-			t.Fatalf("NewGitea(%q) error = %v", ref, err)
-		}
-		return s
-	}
-
-	cases := []struct {
-		name  string
-		flag  string
-		ref   string
-		want  string
-		notes string
-	}{
-		{"default bare branch", "", "main", "main", ""},
-		{"bare ref stays bare", "", "refs/heads/main", "refs/heads/main", "matched exactly by the webhook"},
-		{"explicit bare branch", "main", "release", "main", ""},
-		{"explicit full ref", "refs/heads/main", "release", "refs/heads/main", ""},
-		{"nested branch", "", "feature/nav", "feature/nav", ""},
-		{"bare tag name", "", "v1.2.3", "v1.2.3", "nothing here can tell a tag from a branch"},
-		{"tag ref is kept", "", "refs/tags/v1.2.3", "refs/tags/v1.2.3", "so a push to that tag still reloads"},
-		{"full commit", "", strings.Repeat("a", 40), "", "a push to any ref can move a pinned commit"},
-		{"short sha", "", "abc1234", "", "looksLikeCommit only accepted a full one"},
-		{"file source", "main", "main", "main", ""},
-	}
-
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			var src source.Source = gitea(tc.ref)
-			if tc.name == "file source" {
-				var err error
-				src, err = source.NewFile("nav.yaml")
-				if err != nil {
-					t.Fatal(err)
-				}
-			}
-			if got := refFilter(tc.flag, src); got != tc.want {
-				t.Errorf("refFilter(%q, ref %q) = %q, want %q (%s)",
-					tc.flag, tc.ref, got, tc.want, tc.notes)
-			}
-		})
 	}
 }
 

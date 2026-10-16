@@ -70,8 +70,6 @@ type Options struct {
 	// reported even when nothing has loaded yet, which is precisely when an
 	// operator needs to see what the process is pointed at.
 	Source string
-	// Branch is the ref a webhook must match, e.g. "main". Empty accepts any.
-	Branch string
 	// WebhookSecret enables POST /api/webhook. Empty leaves it disabled.
 	WebhookSecret string
 	// AdminToken enables POST /api/refresh. Empty leaves it disabled.

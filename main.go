@@ -50,7 +50,6 @@ type options struct {
 	poll          time.Duration
 	webhookSecret string
 	adminToken    string
-	branch        string
 	basePath      string
 	cacheFile     string
 	webDir        string
@@ -166,15 +165,12 @@ func run() error {
 		applyConfig(&payload.Config)
 	}
 
-	branch := refFilter(o.branch, src)
-
 	srv, err := server.New(server.Options{
 		Store:         st,
 		Trigger:       watch.Kick,
 		Source:        src.Describe(),
 		Icons:         iconAdapter{iconCache},
 		Status:        probes,
-		Branch:        branch,
 		Verify:        verifyPrivate,
 		WebhookSecret: o.webhookSecret,
 		AdminToken:    o.adminToken,
@@ -422,8 +418,6 @@ func parseFlags() options {
 			"0 disables polling, leaving webhook and manual refresh")
 	fs.StringVar(&o.webhookSecret, "webhook-secret", env("GHOME_WEBHOOK_SECRET", ""),
 		"HMAC secret for POST /api/webhook; empty disables the endpoint")
-	fs.StringVar(&o.branch, "branch", env("GHOME_BRANCH", ""),
-		"branch whose pushes trigger a reload; defaults to --forge-ref")
 	fs.StringVar(&o.adminToken, "admin-token", env("GHOME_ADMIN_TOKEN", ""),
 		"bearer token for POST /api/refresh; empty disables the endpoint")
 	fs.StringVar(&o.basePath, "base-path", env("GHOME_BASE_PATH", ""),
@@ -685,68 +679,6 @@ func isForge(kind string) bool {
 		return true
 	}
 	return false
-}
-
-// refFilter is the ref the webhook must match, or "" to accept any.
-//
-// The value may be written the way git writes a ref ("refs/heads/main",
-// "refs/tags/v1.0") or the way a person does ("main"). A full ref is kept as it
-// is and matched exactly, which is how a config pinned to a tag keeps reloading
-// on that tag. A bare name stays bare and the webhook accepts either the branch
-// or the tag of that name -- the lenient reading -- because nothing here can
-// tell the two apart.
-//
-// A commit or an abbreviated object name yields no filter on purpose: a push to
-// any ref can change what those resolve to, so filtering would be the thing that
-// loses an update.
-func refFilter(flag string, src source.Source) string {
-	if want := strings.TrimSpace(flag); want != "" {
-		return refOnly(want)
-	}
-	g, ok := src.(*source.Gitea)
-	if !ok {
-		return ""
-	}
-	return refOnly(g.Ref())
-}
-
-// refOnly normalises a configured ref, or returns "" when it names a commit
-// rather than a branch or a tag.
-func refOnly(ref string) string {
-	ref = strings.TrimSpace(ref)
-	if ref == "" || looksLikeCommit(ref) || isHex(ref) {
-		return ""
-	}
-	return ref
-}
-
-// isHex reports whether s is an abbreviated git object name. looksLikeCommit
-// only accepts a full one; a short SHA is just as certainly not a branch name,
-// and treating it as one would drop every push.
-func isHex(s string) bool {
-	if len(s) < 7 || len(s) > 40 {
-		return false
-	}
-	for _, r := range strings.ToLower(s) {
-		if !strings.ContainsRune("0123456789abcdef", r) {
-			return false
-		}
-	}
-	return true
-}
-
-// looksLikeCommit reports whether ref is a full git object name rather than a
-// branch or a tag.
-func looksLikeCommit(ref string) bool {
-	if len(ref) != 40 && len(ref) != 64 {
-		return false
-	}
-	for _, r := range strings.ToLower(ref) {
-		if !strings.ContainsRune("0123456789abcdef", r) {
-			return false
-		}
-	}
-	return true
 }
 
 func env(key, fallback string) string {

@@ -325,7 +325,6 @@ ghome --icon-dir=/var/lib/ghome/icons
 | `--forge-token` | `GHOME_FORGE_TOKEN` | | 只读 token（私有仓必填），以 `Authorization: Bearer` 发送 |
 | `--poll` | `GHOME_POLL` | `60s` | 兜底轮询间隔。**`0` 关闭轮询**，只靠 webhook 和手动刷新 |
 | `--webhook-secret` | `GHOME_WEBHOOK_SECRET` | | `POST /api/webhook` 的 HMAC 密钥；留空则关闭该接口 |
-| `--branch` | `GHOME_BRANCH` | | 只对这个分支的推送重载；默认取 `--forge-ref` |
 | `--admin-token` | `GHOME_ADMIN_TOKEN` | | `POST /api/refresh` 的令牌；留空则关闭该接口 |
 | `--cache-file` | `GHOME_CACHE_FILE` | | 持久化最后一份可用配置（含仓库里的 `custom.css`），重启时 forge 不可达也能服务 |
 | `--web-dir` | `GHOME_WEB_DIR` | | 从目录提供 UI，逐文件回退到内嵌副本 |

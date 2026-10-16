@@ -82,7 +82,7 @@ func postWebhook(t *testing.T, srv *Server, body string, headers map[string]stri
 const pushMain = `{"ref":"refs/heads/main","after":"0123456789abcdef","repository":{"full_name":"acme/nav"}}`
 
 func TestWebhookIsDisabledWithoutASecret(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main"})
+	srv, counter := newTestServer(t, Options{})
 
 	rec := postWebhook(t, srv, pushMain, nil)
 	if rec.Code != http.StatusForbidden {
@@ -94,7 +94,7 @@ func TestWebhookIsDisabledWithoutASecret(t *testing.T) {
 }
 
 func TestWebhookRejectsABadSignature(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	rec := postWebhook(t, srv, pushMain, map[string]string{
 		"X-Gitea-Event":     "push",
@@ -109,15 +109,17 @@ func TestWebhookRejectsABadSignature(t *testing.T) {
 }
 
 func TestWebhookRejectsAMissingSignature(t *testing.T) {
-	srv, _ := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	srv, _ := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	if rec := postWebhook(t, srv, pushMain, map[string]string{"X-Gitea-Event": "push"}); rec.Code != http.StatusUnauthorized {
 		t.Errorf("status = %d, want 401", rec.Code)
 	}
 }
 
-func TestWebhookTriggersOnTheWatchedBranch(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+func TestWebhookTriggersOnAnyPush(t *testing.T) {
+	// There is no branch filter here: the git server's webhook filter decides
+	// what is delivered, and ghome reads one ref regardless.
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	rec := postWebhook(t, srv, pushMain, map[string]string{
 		"X-Gitea-Event":     "push",
@@ -131,63 +133,11 @@ func TestWebhookTriggersOnTheWatchedBranch(t *testing.T) {
 	}
 }
 
-// A branch option written the way git writes it used to be pasted onto another
-// "refs/heads/" and never match, so every push was ignored while the endpoint
-// still answered 202. Every other webhook test passes a bare "main", which both
-// spellings accept, so this is the case that pins the normalisation itself.
-func TestWebhookAcceptsAFullRefInTheBranchOption(t *testing.T) {
-	for _, branch := range []string{"main", "refs/heads/main"} {
-		t.Run(branch, func(t *testing.T) {
-			srv, counter := newTestServer(t, Options{Branch: branch, WebhookSecret: "s3cret"})
-
-			rec := postWebhook(t, srv, pushMain, map[string]string{
-				"X-Gitea-Event":     "push",
-				"X-Gitea-Signature": sign(t, pushMain, "s3cret"),
-			})
-			if rec.Code != http.StatusAccepted {
-				t.Fatalf("status = %d, want 202 (body %s)", rec.Code, rec.Body)
-			}
-			if counter.n != 1 {
-				t.Errorf("trigger ran %d times, want 1 for refs/heads/main", counter.n)
-			}
-		})
-	}
-}
-
-// A bare filter name matches the tag of the same name too: nothing in the config
-// says which of the two it means. A full ref does not -- pinning to a tag must
-// keep reloading on that tag, and must not reload on a branch of the same name.
-func TestWebhookFilterMatching(t *testing.T) {
-	cases := []struct {
-		want, ref string
-		reload    bool
-	}{
-		{"", "refs/heads/anything", true},            // no filter
-		{"main", "refs/heads/main", true},            // bare name, branch
-		{"main", "refs/tags/main", true},             // bare name, tag of the same name
-		{"main", "refs/heads/other", false},          // another branch
-		{"refs/heads/main", "refs/heads/main", true}, // full ref, exact
-		{"refs/heads/main", "refs/tags/main", false}, // full ref does not drift
-		{"refs/tags/v1.0", "refs/tags/v1.0", true},   // pinned to a tag
-		{"refs/tags/v1.0", "refs/heads/v1.0", false},
-		{"v1.0", "refs/tags/v1.0", true},    // bare tag name, lenient
-		{"main", "refs/pull/7/head", false}, // never a branch
-	}
-	for _, tc := range cases {
-		srv, counter := newTestServer(t, Options{Branch: tc.want, WebhookSecret: "s3cret"})
-		body := `{"ref":"` + tc.ref + `","repository":{"full_name":"acme/nav"}}`
-		postWebhook(t, srv, body, map[string]string{
-			"X-Gitea-Event":     "push",
-			"X-Gitea-Signature": sign(t, body, "s3cret"),
-		})
-		got := counter.n == 1
-		if got != tc.reload {
-			t.Errorf("Branch=%q ref=%q: reloaded=%v, want %v", tc.want, tc.ref, got, tc.reload)
-		}
-	}
-
-	// A payload with no ref at all is not a reason to skip an update.
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+// A push event that does not say which ref moved is still a reason to reload:
+// a missed update is worse than a spare fetch, and the watcher stops a fetch
+// that changed nothing.
+func TestWebhookWithoutARefStillReloads(t *testing.T) {
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 	body := `{"repository":{"full_name":"acme/nav"}}`
 	postWebhook(t, srv, body, map[string]string{
 		"X-Gitea-Event":     "push",
@@ -198,27 +148,8 @@ func TestWebhookFilterMatching(t *testing.T) {
 	}
 }
 
-func TestWebhookIgnoresOtherBranches(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
-
-	body := `{"ref":"refs/heads/feature/x","repository":{"full_name":"acme/nav"}}`
-	rec := postWebhook(t, srv, body, map[string]string{
-		"X-Gitea-Event":     "push",
-		"X-Gitea-Signature": sign(t, body, "s3cret"),
-	})
-	if rec.Code != http.StatusAccepted {
-		t.Fatalf("status = %d, want 202", rec.Code)
-	}
-	if counter.n != 0 {
-		t.Errorf("trigger ran %d times, want 0 for an unrelated branch", counter.n)
-	}
-	if !strings.Contains(rec.Body.String(), "ignored") {
-		t.Errorf("body = %s, want an ignored notice", rec.Body)
-	}
-}
-
 func TestWebhookAnswersGiteaPing(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	body := `{"zen":"Keep it simple."}`
 	rec := postWebhook(t, srv, body, map[string]string{
@@ -234,7 +165,7 @@ func TestWebhookAnswersGiteaPing(t *testing.T) {
 }
 
 func TestWebhookAcceptsTheGitHubStyleSignature(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	rec := postWebhook(t, srv, pushMain, map[string]string{
 		"X-Gitea-Event":       "push",
@@ -249,7 +180,7 @@ func TestWebhookAcceptsTheGitHubStyleSignature(t *testing.T) {
 }
 
 func TestWebhookAcceptsTheLegacySHA1Signature(t *testing.T) {
-	srv, _ := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	srv, _ := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	mac := hmac.New(sha1.New, []byte("s3cret"))
 	mac.Write([]byte(pushMain))
@@ -953,7 +884,7 @@ func TestWebhookAcceptsForgejoHeaders(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+			srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 			rec := postWebhook(t, srv, pushMain, tc.headers)
 			if rec.Code != tc.want {
 				t.Fatalf("status = %d, want %d (body %s)", rec.Code, tc.want, rec.Body)
@@ -970,7 +901,7 @@ func TestWebhookAcceptsForgejoHeaders(t *testing.T) {
 
 // A Forgejo ping must not be mistaken for a push.
 func TestWebhookHandlesForgejoPing(t *testing.T) {
-	srv, counter := newTestServer(t, Options{Branch: "main", WebhookSecret: "s3cret"})
+	srv, counter := newTestServer(t, Options{WebhookSecret: "s3cret"})
 
 	body := `{"zen":"Non-blocking is better than blocking."}`
 	rec := postWebhook(t, srv, body, map[string]string{

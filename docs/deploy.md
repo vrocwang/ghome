@@ -102,11 +102,11 @@ docker buildx build --platform linux/amd64,linux/arm64 -t ghome --push .
 
 ### 这些参数在容器里怎么给
 
-21 个 flag 在容器里分三类，给法不一样：
+20 个 flag 在容器里分三类，给法不一样：
 
 | 类型 | 有哪些 | 怎么给 |
 | --- | --- | --- |
-| **设置** | 19 个：`--listen` `--source` `--file` `--forge-*`（6 个）`--poll` `--webhook-secret` `--branch` `--admin-token` `--base-path` `--cache-file` `--web-dir` `--icon-dir` `--icon-fetch` `--log-level` | 环境变量，写进 `ghome.env`，compose 用 `env_file` 引入 |
+| **设置** | 18 个：`--listen` `--source` `--file` `--forge-*`（6 个）`--poll` `--webhook-secret` `--admin-token` `--base-path` `--cache-file` `--web-dir` `--icon-dir` `--icon-fetch` `--log-level` | 环境变量，写进 `ghome.env`，compose 用 `env_file` 引入 |
 | **需要宿主目录** | `--web-dir`、`--icon-dir` | 环境变量 **+ 只读卷**，两半必须指向同一个容器内路径 |
 | **一次性动作** | `--dump-web`、`--healthcheck`、`--version` | 直接当命令参数——它们是动作不是配置，所以**没有环境变量** |
 

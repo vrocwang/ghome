@@ -137,7 +137,6 @@ func newNavStack(t *testing.T) *navStack {
 	srv, err := server.New(server.Options{
 		Store:         st,
 		Trigger:       watch.Kick,
-		Branch:        "main",
 		WebhookSecret: testWebhookSecret,
 	})
 	if err != nil {
